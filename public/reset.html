@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SVIT Election - Reset Password</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    .reset-container {
+      background: white;
+      border-radius: 20px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      padding: 60px 40px;
+      width: 100%;
+      max-width: 480px;
+      animation: slideUp 0.6s ease-out;
+    }
+    
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(30px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+    
+    .reset-header {
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    
+    .reset-header h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    
+    .reset-header p {
+      color: #999;
+      font-size: 14px;
+      margin: 0;
+    }
+    
+    .form-group {
+      margin-bottom: 25px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 10px;
+      font-weight: 600;
+      color: #333;
+      font-size: 14px;
+    }
+    
+    .form-group input {
+      width: 100%;
+      padding: 14px 16px;
+      border: 2px solid #e0e0e0;
+      border-radius: 10px;
+      font-size: 16px;
+      transition: all 0.3s ease;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    .form-group input:focus {
+      outline: none;
+      border-color: #667eea;
+      box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    
+    .btn-reset {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-reset:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+    }
+    
+    .btn-reset:active {
+      transform: translateY(0);
+    }
+    
+    .btn-reset:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    .error-message {
+      display: none;
+      background: #fee;
+      color: #c33;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border-left: 4px solid #c33;
+      font-size: 14px;
+      animation: shake 0.3s ease;
+    }
+    
+    .success-message {
+      display: none;
+      background: #efe;
+      color: #3c3;
+      padding: 12px 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border-left: 4px solid #3c3;
+      font-size: 14px;
+    }
+    
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      25% { transform: translateX(-5px); }
+      75% { transform: translateX(5px); }
+    }
+    
+    .link-bottom {
+      text-align: center;
+      margin-top: 20px;
+      font-size: 14px;
+      color: #666;
+    }
+    
+    .link-bottom a {
+      color: #667eea;
+      text-decoration: none;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    
+    .link-bottom a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="reset-container">
+    <div class="reset-header">
+      <h1>Reset Password</h1>
+      <p>Enter your username and new password</p>
+    </div>
+    
+    <div class="error-message" id="errorMsg"></div>
+    <div class="success-message" id="successMsg"></div>
+    
+    <div class="form-group">
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="Enter your username" 
+             autocomplete="off" onkeypress="handleKeyPress(event)">
+    </div>
+    
+    <div class="form-group">
+      <label for="newPassword">New Password</label>
+      <input type="password" id="newPassword" placeholder="Enter new password" 
+             autocomplete="off" onkeypress="handleKeyPress(event)">
+    </div>
+    
+    <div class="form-group">
+      <label for="confirmPassword">Confirm Password</label>
+      <input type="password" id="confirmPassword" placeholder="Confirm new password" 
+             autocomplete="off" onkeypress="handleKeyPress(event)">
+    </div>
+    
+    <button class="btn-reset" onclick="resetPassword()" id="resetBtn">Reset Password</button>
+    
+    <div class="link-bottom">
+      <a href="deshboard.html">🏠 Dashboard</a> &nbsp;|&nbsp;
+      Remember your password? <a onclick="goToLogin()">Login</a>
+    </div>
+  </div>
+
+  <script>
+    function goToLogin() {
+      window.location = 'index.html';
+    }
+    
+    function handleKeyPress(event) {
+      if (event.key === 'Enter') {
+        resetPassword();
+      }
+    }
+    
+    async function resetPassword() {
+      const username = document.getElementById('username').value;
+      const newPassword = document.getElementById('newPassword').value;
+      const confirmPassword = document.getElementById('confirmPassword').value;
+      const errorMsg = document.getElementById('errorMsg');
+      const successMsg = document.getElementById('successMsg');
+      const resetBtn = document.getElementById('resetBtn');
+      
+      errorMsg.style.display = 'none';
+      successMsg.style.display = 'none';
+      
+      if (!username || !newPassword || !confirmPassword) {
+        errorMsg.textContent = 'Please fill all fields';
+        errorMsg.style.display = 'block';
+        return;
+      }
+      
+      if (newPassword.length < 6) {
+        errorMsg.textContent = 'Password must be at least 6 characters';
+        errorMsg.style.display = 'block';
+        return;
+      }
+      
+      if (newPassword !== confirmPassword) {
+        errorMsg.textContent = 'Passwords do not match';
+        errorMsg.style.display = 'block';
+        return;
+      }
+      
+      resetBtn.disabled = true;
+      resetBtn.textContent = 'Resetting...';
+      
+      try {
+        const response = await fetch(window.location.origin + '/reset-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ username, newPassword })
+        });
+        
+        const data = await parseJsonResponse(response);
+        
+        if (response.ok) {
+          successMsg.textContent = '✅ Password reset successfully! Redirecting to login...';
+          successMsg.style.display = 'block';
+          setTimeout(() => {
+            window.location = 'index.html';
+          }, 2000);
+        } else {
+          errorMsg.textContent = data.error || 'Password reset failed';
+          errorMsg.style.display = 'block';
+          resetBtn.disabled = false;
+          resetBtn.textContent = 'Reset Password';
+        }
+      } catch (error) {
+        console.error('Reset error:', error);
+        errorMsg.textContent = 'Connection error: ' + error.message;
+        errorMsg.style.display = 'block';
+        resetBtn.disabled = false;
+        resetBtn.textContent = 'Reset Password';
+      }
+    }
+
+    async function parseJsonResponse(response) {
+      const contentType = response.headers.get('content-type') || '';
+      const text = await response.text();
+
+      if (!text) {
+        throw new Error(`Empty response body (${response.status} ${response.statusText})`);
+      }
+
+      if (contentType.includes('application/json')) {
+        try {
+          return JSON.parse(text);
+        } catch (err) {
+          throw new Error(`Invalid JSON response: ${text}`);
+        }
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch (err) {
+        throw new Error(`Unexpected response type: ${contentType || 'unknown'} (${response.status} ${response.statusText}) - ${text}`);
+      }
+    }
+  </script>
+</body>
+</html>
