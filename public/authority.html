@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SVIT Election - Authority Panel</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --primary-gradient: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+      --accent-gradient: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+    }
+
+    body {
+      background: #f1f5f9;
+      font-family: 'Inter', sans-serif;
+    }
+
+    .header {
+      background: var(--primary-gradient);
+      color: white;
+      padding: 60px 0 120px;
+      margin-bottom: -80px;
+    }
+
+    .card-stat {
+      border: none;
+      border-radius: 20px;
+      padding: 30px;
+      background: white;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.05);
+      height: 100%;
+      transition: transform 0.3s;
+    }
+
+    .card-stat:hover {
+      transform: translateY(-5px);
+    }
+
+    .icon-box {
+      width: 60px;
+      height: 60px;
+      border-radius: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 20px;
+    }
+
+    .btn-action {
+      border-radius: 15px;
+      padding: 15px 25px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      transition: all 0.3s;
+    }
+
+    .bg-indigo { background: #e0e7ff; color: #4338ca; }
+    .bg-purple { background: #f3e8ff; color: #7e22ce; }
+    .bg-emerald { background: #d1fae5; color: #047857; }
+  </style>
+</head>
+<body>
+
+<div class="header text-center">
+  <div class="container">
+    <h1 class="display-4 fw-bold mb-3">Authority Control Center</h1>
+    <p class="lead opacity-75">High-Level System Oversight & Data Management</p>
+  </div>
+</div>
+
+<div class="container">
+  <div class="row g-4 mb-5">
+    <div class="col-md-4">
+      <div class="card-stat">
+        <div class="icon-box bg-indigo"><i class="fas fa-user-shield"></i></div>
+        <h2 class="fw-bold" id="userCount">0</h2>
+        <p class="text-muted mb-0">Authorized Users</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card-stat">
+        <div class="icon-box bg-purple"><i class="fas fa-id-card"></i></div>
+        <h2 class="fw-bold" id="candidateCount">0</h2>
+        <p class="text-muted mb-0">Total Candidates</p>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card-stat">
+        <div class="icon-box bg-emerald"><i class="fas fa-check-circle"></i></div>
+        <h2 class="fw-bold" id="voteCount">0</h2>
+        <p class="text-muted mb-0">Total Votes Cast</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 justify-content-center">
+    <div class="col-md-4">
+      <div class="card p-4 text-center border-0 shadow-sm" style="border-radius: 20px;">
+        <i class="fas fa-users fa-3x mb-3 text-primary"></i>
+        <h4>User Management</h4>
+        <p class="text-muted small mb-4">Create, manage, and monitor system access for data entry operators.</p>
+        <a href="user-management.html" class="btn btn-primary btn-action w-100">Open Manager</a>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-4 text-center border-0 shadow-sm" style="border-radius: 20px;">
+        <i class="fas fa-vote-yea fa-3x mb-3 text-success"></i>
+        <h4>Voting Portal</h4>
+        <p class="text-muted small mb-4">Access the manual voting interface and ballot matrix for data entry.</p>
+        <a href="manual-vote.html" class="btn btn-success btn-action w-100">Go to Portal</a>
+      </div>
+    </div>
+    <div class="col-md-4">
+      <div class="card p-4 text-center border-0 shadow-sm" style="border-radius: 20px;">
+        <i class="fas fa-chart-pie fa-3x mb-3 text-info"></i>
+        <h4>Analytics Dashboard</h4>
+        <p class="text-muted small mb-4">View real-time results, charts, and village-wise distribution.</p>
+        <a href="deshboard.html" class="btn btn-info btn-action w-100 text-white">View Analytics</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="text-center mt-5">
+    <button onclick="logout()" class="btn btn-outline-danger px-5 py-3 rounded-pill fw-bold">
+      <i class="fas fa-sign-out-alt me-2"></i> LOGOUT FROM AUTHORITY SYSTEM
+    </button>
+  </div>
+</div>
+
+<script>
+  function applyRoleVisibility() {
+    const role = localStorage.getItem('userRole');
+    if (role !== 'admin') {
+      window.location = 'deshboard.html';
+    }
+  }
+
+  async function loadStats() {
+    try {
+      const [uRes, mRes] = await Promise.all([
+        fetch('/users'),
+        fetch('/votes')
+      ]);
+      const users = await uRes.json();
+      const members = await mRes.json();
+      
+      document.getElementById('userCount').textContent = users.length;
+      document.getElementById('candidateCount').textContent = members.length;
+      document.getElementById('voteCount').textContent = members.reduce((sum, m) => sum + (m.total_votes || 0), 0);
+    } catch (e) { console.error(e); }
+  }
+
+  function logout() { window.location = 'index.html'; }
+  
+  window.onload = () => {
+    applyRoleVisibility();
+    loadStats();
+  };
+</script>
+</body>
+</html>

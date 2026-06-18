@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SVIT Election - New Candidate</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+  <style>
+    :root {
+      --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --secondary-gradient: linear-gradient(135deg, #21d4fd 0%, #b721ff 100%);
+      --success-gradient: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+      --danger-gradient: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    }
+
+    body {
+      background: #f0f2f5;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #334155;
+    }
+
+    .header {
+      background: var(--primary-gradient);
+      color: white;
+      padding: 40px 0 100px;
+      margin-bottom: -70px;
+    }
+
+    .card {
+      border: none;
+      border-radius: 16px;
+      box-shadow: 0 4px 25px rgba(0, 0, 0, 0.05);
+      transition: transform 0.3s ease;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+
+    .btn-custom {
+      border-radius: 12px;
+      padding: 10px 20px;
+      font-weight: 600;
+      transition: all 0.3s;
+    }
+
+    .form-control-custom {
+      border-radius: 10px;
+      border: 2px solid #f1f5f9;
+      padding: 12px 16px;
+      font-size: 15px;
+      transition: all 0.2s;
+    }
+
+    .form-control-custom:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.1);
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 20px;
+    }
+
+    .stat-mini-card {
+      padding: 15px;
+      background: white;
+      border-radius: 12px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .stat-mini-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    .admin-only { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="container d-flex justify-content-between align-items-center">
+    <div>
+      <h1 class="mb-0"><i class="fas fa-user-plus"></i> New Candidate</h1>
+      <p class="mb-0 opacity-75">Register a new candidate for the election</p>
+    </div>
+    <div class="d-flex gap-2">
+      <button onclick="logout()" class="btn btn-danger btn-custom"><i class="fas fa-sign-out-alt"></i> Logout</button>
+    </div>
+  </div>
+</div>
+
+<div class="container" style="margin-top: -60px;">
+  <div class="row g-4">
+    <!-- Sidebar -->
+    <div class="col-md-3">
+      <div class="sidebar">
+        <div class="card p-3 mb-3">
+          <h6 class="fw-bold mb-3 text-muted">LIVE STATISTICS</h6>
+          <div class="stat-mini-card">
+            <div class="stat-mini-icon bg-primary text-white"><i class="fas fa-users"></i></div>
+            <div>
+              <div class="fw-bold h5 mb-0" id="totalMembers">0</div>
+              <small class="text-muted">Members</small>
+            </div>
+          </div>
+          <div class="stat-mini-card">
+            <div class="stat-mini-icon bg-indigo text-white" style="background: #6366f1;"><i class="fas fa-poll"></i></div>
+            <div>
+              <div class="fw-bold h5 mb-0" id="totalVotes">0</div>
+              <small class="text-muted">Total Votes</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-3">
+          <h6 class="fw-bold mb-3 text-muted">QUICK NAVIGATION</h6>
+          <div class="list-group list-group-flush">
+            <a href="deshboard.html" class="list-group-item list-group-item-action border-0 px-0">
+              <i class="fas fa-chart-line me-2 text-success"></i> Dashboard
+            </a>
+            <a href="new-candidate.html" class="list-group-item list-group-item-action border-0 px-0 active">
+              <i class="fas fa-user-plus me-2 text-primary"></i> New Candidate
+            </a>
+            <a href="manual-vote.html" class="list-group-item list-group-item-action border-0 px-0">
+              <i class="fas fa-vote-yea me-2 text-warning"></i> Manual Dashboard
+            </a>
+            <a href="user-management.html" class="list-group-item list-group-item-action border-0 px-0 admin-only">
+              <i class="fas fa-users-cog me-2 text-indigo"></i> User Management
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="col-md-9">
+      <div class="card">
+        <div class="card-body p-4">
+          <h4 class="fw-bold mb-4"><i class="fas fa-user-plus me-2 text-primary"></i> Register New Candidate</h4>
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label fw-semibold">SR Number</label>
+              <input id="formSrNumber" class="form-control form-control-custom" placeholder="Enter SR number">
+            </div>
+            <div class="col-md-8">
+              <label class="form-label fw-semibold">Candidate Name</label>
+              <input id="formVoterName" class="form-control form-control-custom" placeholder="Enter full name">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-semibold">Village</label>
+              <input id="formVillage" class="form-control form-control-custom" placeholder="Enter village name">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-semibold">Mobile</label>
+              <input id="formMobile" class="form-control form-control-custom" placeholder="Enter mobile number">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-semibold">Votes</label>
+              <input id="formVotes" type="number" class="form-control form-control-custom" placeholder="Initial votes" value="0">
+            </div>
+            <div class="col-md-12">
+              <label class="form-label fw-semibold">Logo URL (optional)</label>
+              <input id="formLogo" class="form-control form-control-custom" placeholder="https://example.com/logo.png">
+            </div>
+            <div class="col-12 d-flex gap-3 mt-4">
+              <button id="saveCandidateBtn" class="btn btn-primary btn-custom px-4" onclick="saveCandidate()">
+                <i class="fas fa-save me-1"></i> Save Candidate
+              </button>
+              <button class="btn btn-secondary btn-custom px-4" onclick="resetCandidateForm()">
+                <i class="fas fa-undo me-1"></i> Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent Candidates -->
+      <div class="card">
+        <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+          <h5 class="fw-bold mb-0"><i class="fas fa-list me-2"></i> All Candidates</h5>
+          <span class="badge bg-primary" id="candidateCount">0</span>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-hover mb-0">
+              <thead class="bg-light">
+                <tr>
+                  <th class="ps-3">SR</th>
+                  <th>Name</th>
+                  <th>Village</th>
+                  <th>Mobile</th>
+                  <th class="text-end pe-3">Votes</th>
+                </tr>
+              </thead>
+              <tbody id="candidatesTableBody"></tbody>
+            </table>
+          </div>
+          <div id="noResults" class="text-center p-5" style="display: none;">
+            <i class="fas fa-inbox fa-3x text-light mb-3"></i>
+            <p class="text-muted">No candidates registered yet</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let allMembers = [];
+
+  async function loadMembers() {
+    try {
+      const response = await fetch(window.location.origin + '/votes');
+      if (!response.ok) throw new Error('Network response was not ok');
+      allMembers = await response.json();
+      renderCandidates();
+      updateStats();
+    } catch (error) {
+      console.error('Error:', error);
+    }
+  }
+
+  function updateStats() {
+    document.getElementById('totalMembers').textContent = allMembers.length;
+    const totalVotes = allMembers.reduce((sum, m) => sum + (m.total_votes || 0), 0);
+    document.getElementById('totalVotes').textContent = totalVotes;
+    document.getElementById('candidateCount').textContent = allMembers.length;
+  }
+
+  function renderCandidates() {
+    const tbody = document.getElementById('candidatesTableBody');
+    const noRes = document.getElementById('noResults');
+
+    if (allMembers.length === 0) {
+      tbody.innerHTML = '';
+      noRes.style.display = 'block';
+      return;
+    }
+
+    noRes.style.display = 'none';
+    tbody.innerHTML = allMembers.map(m => `
+      <tr>
+        <td class="ps-3 fw-bold">#${m.sr_number}</td>
+        <td>${m.voter_name || '-'}</td>
+        <td><i class="fas fa-map-marker-alt text-muted me-1"></i> ${m.village || '-'}</td>
+        <td class="text-muted">${m.mobile || '-'}</td>
+        <td class="text-end pe-3"><span class="badge bg-light text-primary fw-bold">${m.total_votes || 0}</span></td>
+      </tr>
+    `).join('');
+  }
+
+  let editingId = null;
+
+  function resetCandidateForm() {
+    editingId = null;
+    document.querySelectorAll('#saveCandidateBtn').forEach(b => b.textContent = 'Save Candidate');
+    document.getElementById('formSrNumber').value = '';
+    document.getElementById('formVoterName').value = '';
+    document.getElementById('formVillage').value = '';
+    document.getElementById('formMobile').value = '';
+    document.getElementById('formLogo').value = '';
+    document.getElementById('formVotes').value = '0';
+  }
+
+  async function saveCandidate() {
+    const payload = {
+      sr_number: document.getElementById('formSrNumber').value,
+      voter_name: document.getElementById('formVoterName').value,
+      village: document.getElementById('formVillage').value,
+      mobile: document.getElementById('formMobile').value,
+      logo: document.getElementById('formLogo').value,
+      total_votes: parseInt(document.getElementById('formVotes').value) || 0
+    };
+
+    const method = editingId ? 'PUT' : 'POST';
+    const url = editingId ? `/votes/${editingId}` : '/votes';
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        resetCandidateForm();
+        loadMembers();
+      }
+    } catch (e) {
+      console.error('Error saving candidate:', e);
+    }
+  }
+
+  function logout() { window.location = 'index.html'; }
+
+  function applyRoleVisibility() {
+    const role = localStorage.getItem('userRole');
+    if (role !== 'admin') {
+      document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
+    } else {
+      document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'inline-block');
+    }
+  }
+
+  window.addEventListener('load', () => {
+    loadMembers();
+    applyRoleVisibility();
+  });
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
