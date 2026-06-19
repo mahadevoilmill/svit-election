@@ -177,6 +177,8 @@
       box-shadow: none;
     }
 
+    .admin-only { display: none; }
+
     @media (max-width: 768px) {
       .header { padding-bottom: 120px; }
     }
@@ -191,7 +193,9 @@
       <p class="mb-0 opacity-75">Live Voting Analytics & Management</p>
     </div>
     <div class="d-flex gap-2">
-      <a href="manual-vote.html" class="btn btn-light btn-custom text-primary"><i class="fas fa-plus"></i> Manual Vote</a>
+      <a href="new-candidate.html" class="btn btn-light btn-custom text-success admin-only"><i class="fas fa-user-plus"></i> New Candidate</a>
+      <a href="manual-vote.html" class="btn btn-light btn-custom text-primary no-dashboard"><i class="fas fa-plus"></i> Manual Vote</a>
+      <a href="user-management.html" class="btn btn-light btn-custom text-warning admin-only"><i class="fas fa-users-cog"></i> Users</a>
       <button onclick="logout()" class="btn btn-danger btn-custom"><i class="fas fa-sign-out-alt"></i> Logout</button>
     </div>
   </div>
@@ -560,12 +564,29 @@
 
   function logout() { window.location = 'index.html'; }
 
+  function applyRoleVisibility() {
+    const role = localStorage.getItem('userRole');
+    if (role !== 'admin') {
+      document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
+    } else {
+      document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'inline-block');
+    }
+    if (role === 'dashboard') {
+      document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = 'none');
+    } else {
+      document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = '');
+    }
+  }
+
   document.getElementById('searchInput').addEventListener('input', (e) => {
     currentSearch = e.target.value;
     renderMembers();
   });
 
-  window.addEventListener('load', loadMembers);
+  window.addEventListener('load', () => {
+    loadMembers();
+    applyRoleVisibility();
+  });
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>

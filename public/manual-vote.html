@@ -222,10 +222,10 @@
             <a href="deshboard.html" class="list-group-item list-group-item-action border-0 px-0">
               <i class="fas fa-chart-line me-2 text-success"></i> Dashboard
             </a>
-            <a href="new-candidate.html" class="list-group-item list-group-item-action border-0 px-0">
+            <a href="new-candidate.html" class="list-group-item list-group-item-action border-0 px-0 admin-only">
               <i class="fas fa-user-plus me-2 text-primary"></i> New Candidate
             </a>
-            <a href="manual-vote.html" class="list-group-item list-group-item-action border-0 px-0 active">
+            <a href="manual-vote.html" class="list-group-item list-group-item-action border-0 px-0 active no-dashboard">
               <i class="fas fa-vote-yea me-2 text-warning"></i> Manual Dashboard
             </a>
             <a href="user-management.html" class="list-group-item list-group-item-action border-0 px-0 admin-only">
@@ -403,7 +403,7 @@
       const res = await fetch('/votes/by-sr/votes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sr_numbers: srs })
+        body: JSON.stringify({ sr_numbers: srs, entered_by: localStorage.getItem('username') })
       });
       
       if (res.ok) {
@@ -454,6 +454,7 @@
             <th class="text-center">
               <div class="d-flex flex-column align-items-center gap-1">
                 <span>B#${i+1}</span>
+                <span class="text-muted" style="font-size: 9px; line-height: 1.1;">by ${b.entered_by || 'Unknown'}</span>
                 <button class="btn btn-link btn-sm p-0 text-danger" onclick="deleteBallot(${b.id})" title="Delete Ballot">
                   <i class="fas fa-times-circle"></i>
                 </button>
@@ -565,11 +566,15 @@
 
     function applyRoleVisibility() {
       const role = localStorage.getItem('userRole');
-      console.log('Current user role:', role);
       if (role !== 'admin') {
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
       } else {
         document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'inline-block');
+      }
+      if (role === 'dashboard') {
+        document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = 'none');
+      } else {
+        document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = '');
       }
     }
 

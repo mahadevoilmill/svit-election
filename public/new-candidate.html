@@ -127,10 +127,10 @@
             <a href="deshboard.html" class="list-group-item list-group-item-action border-0 px-0">
               <i class="fas fa-chart-line me-2 text-success"></i> Dashboard
             </a>
-            <a href="new-candidate.html" class="list-group-item list-group-item-action border-0 px-0 active">
+            <a href="new-candidate.html" class="list-group-item list-group-item-action border-0 px-0 active admin-only">
               <i class="fas fa-user-plus me-2 text-primary"></i> New Candidate
             </a>
-            <a href="manual-vote.html" class="list-group-item list-group-item-action border-0 px-0">
+            <a href="manual-vote.html" class="list-group-item list-group-item-action border-0 px-0 no-dashboard">
               <i class="fas fa-vote-yea me-2 text-warning"></i> Manual Dashboard
             </a>
             <a href="user-management.html" class="list-group-item list-group-item-action border-0 px-0 admin-only">
@@ -163,13 +163,37 @@
               <label class="form-label fw-semibold">Mobile</label>
               <input id="formMobile" class="form-control form-control-custom" placeholder="Enter mobile number">
             </div>
-            <div class="col-md-4">
-              <label class="form-label fw-semibold">Votes</label>
-              <input id="formVotes" type="number" class="form-control form-control-custom" placeholder="Initial votes" value="0">
-            </div>
             <div class="col-md-12">
-              <label class="form-label fw-semibold">Logo URL (optional)</label>
-              <input id="formLogo" class="form-control form-control-custom" placeholder="https://example.com/logo.png">
+              <ul class="nav nav-tabs mb-3" id="imageTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link active" id="photo-tab" data-bs-toggle="tab" data-bs-target="#photo-panel" type="button" role="tab"><i class="fas fa-camera me-1"></i>Photo</button>
+                </li>
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link" id="logo-tab" data-bs-toggle="tab" data-bs-target="#logo-panel" type="button" role="tab"><i class="fas fa-tag me-1"></i>Logo</button>
+                </li>
+              </ul>
+              <div class="tab-content">
+                <div class="tab-pane fade show active" id="photo-panel" role="tabpanel">
+                  <div class="d-flex align-items-center gap-3">
+                    <input id="formPhotoFile" type="file" class="form-control form-control-custom" accept="image/*" onchange="previewImage('formPhotoFile', 'photoPreview', 'formPhoto', 'formPhotoUrl')">
+                    <input id="formPhoto" type="hidden">
+                    <img id="photoPreview" class="rounded" style="width:60px;height:60px;object-fit:cover;display:none;border:2px solid #e2e8f0;">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearImage('formPhotoFile', 'photoPreview', 'formPhoto', 'formPhotoUrl')" style="display:none;" id="clearPhotoBtn"><i class="fas fa-times"></i></button>
+                  </div>
+                  <small class="text-muted">Upload a candidate photo or enter a URL below</small>
+                  <input id="formPhotoUrl" class="form-control form-control-custom mt-2" placeholder="Or paste photo URL" oninput="syncImageUrl('formPhotoUrl', 'formPhotoFile', 'photoPreview', 'clearPhotoBtn', 'formPhoto')">
+                </div>
+                <div class="tab-pane fade" id="logo-panel" role="tabpanel">
+                  <div class="d-flex align-items-center gap-3">
+                    <input id="formLogoFile" type="file" class="form-control form-control-custom" accept="image/*" onchange="previewImage('formLogoFile', 'logoPreview', 'formLogo', 'formLogoUrl')">
+                    <input id="formLogo" type="hidden">
+                    <img id="logoPreview" class="rounded" style="width:60px;height:60px;object-fit:cover;display:none;border:2px solid #e2e8f0;">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearImage('formLogoFile', 'logoPreview', 'formLogo', 'formLogoUrl')" style="display:none;" id="clearLogoBtn"><i class="fas fa-times"></i></button>
+                  </div>
+                  <small class="text-muted">Upload a party/organization logo or enter a URL below</small>
+                  <input id="formLogoUrl" class="form-control form-control-custom mt-2" placeholder="Or paste logo URL" oninput="syncImageUrl('formLogoUrl', 'formLogoFile', 'logoPreview', 'clearLogoBtn', 'formLogo')">
+                </div>
+              </div>
             </div>
             <div class="col-12 d-flex gap-3 mt-4">
               <button id="saveCandidateBtn" class="btn btn-primary btn-custom px-4" onclick="saveCandidate()">
@@ -194,11 +218,13 @@
             <table class="table table-hover mb-0">
               <thead class="bg-light">
                 <tr>
+                  <th class="ps-3">Photo</th>
+                  <th>Logo</th>
                   <th class="ps-3">SR</th>
                   <th>Name</th>
                   <th>Village</th>
                   <th>Mobile</th>
-                  <th class="text-end pe-3">Votes</th>
+                  <th class="text-center pe-3">Actions</th>
                 </tr>
               </thead>
               <tbody id="candidatesTableBody"></tbody>
@@ -247,55 +273,205 @@
     }
 
     noRes.style.display = 'none';
-    tbody.innerHTML = allMembers.map(m => `
-      <tr>
-        <td class="ps-3 fw-bold">#${m.sr_number}</td>
-        <td>${m.voter_name || '-'}</td>
-        <td><i class="fas fa-map-marker-alt text-muted me-1"></i> ${m.village || '-'}</td>
-        <td class="text-muted">${m.mobile || '-'}</td>
-        <td class="text-end pe-3"><span class="badge bg-light text-primary fw-bold">${m.total_votes || 0}</span></td>
-      </tr>
-    `).join('');
+    Promise.all(allMembers.map(m =>
+      fetch(`/candidate-logo/${m.sr_number}`).then(r => r.json()).then(d => ({ ...m, partyLogo: d.logo_url || '' })).catch(() => ({ ...m, partyLogo: '' }))
+    )).then(members => {
+      tbody.innerHTML = members.map(m => `
+        <tr>
+          <td class="ps-3">
+            <img src="${m.logo || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(m.voter_name || 'U') + '&background=random'}" class="rounded" style="width:40px;height:40px;object-fit:cover;" onerror="imgFallback(this, '${(m.voter_name || 'U').replace(/'/g, "\\'")}')">
+          </td>
+          <td>
+            ${m.partyLogo ? `<img src="${m.partyLogo}" style="width:30px;height:30px;object-fit:contain;">` : '<span class="text-muted small">—</span>'}
+          </td>
+          <td class="fw-bold">#${m.sr_number}</td>
+          <td>${m.voter_name || '-'}</td>
+          <td><i class="fas fa-map-marker-alt text-muted me-1"></i> ${m.village || '-'}</td>
+          <td class="text-muted">${m.mobile || '-'}</td>
+          <td class="text-center pe-3">
+            <button class="btn btn-sm btn-outline-warning me-1" onclick="editCandidate('${m.id}')" title="Edit">
+              <i class="fas fa-edit"></i>
+            </button>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteCandidate('${m.id}')" title="Delete">
+              <i class="fas fa-trash"></i>
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    });
+  }
+
+  function imgFallback(img, name) {
+    img.src = 'https://ui-avatars.com/api/?name=' + encodeURIComponent(name) + '&background=random';
   }
 
   let editingId = null;
 
+  function previewImage(fileId, previewId, hiddenId, urlId) {
+    const file = document.getElementById(fileId).files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+      const preview = document.getElementById(previewId);
+      preview.src = e.target.result;
+      preview.style.display = 'inline-block';
+    };
+    reader.readAsDataURL(file);
+    document.getElementById(urlId).value = '';
+    document.getElementById(hiddenId).value = '';
+  }
+
+  function clearImage(fileId, previewId, hiddenId, urlId) {
+    document.getElementById(fileId).value = '';
+    document.getElementById(hiddenId).value = '';
+    document.getElementById(urlId).value = '';
+    const preview = document.getElementById(previewId);
+    preview.src = '';
+    preview.style.display = 'none';
+  }
+
+  function syncImageUrl(urlId, fileId, previewId, clearBtnId, hiddenId) {
+    const value = document.getElementById(urlId).value;
+    if (value) {
+      document.getElementById(fileId).value = '';
+      const preview = document.getElementById(previewId);
+      preview.src = value;
+      preview.style.display = 'inline-block';
+      document.getElementById(hiddenId).value = value;
+    }
+  }
+
+  async function uploadFile(fileInput) {
+    if (!fileInput || !fileInput.files.length) return '';
+    const formData = new FormData();
+    formData.append('logo', fileInput.files[0]);
+    const res = await fetch('/upload-logo', { method: 'POST', body: formData });
+    if (res.ok) {
+      const data = await res.json();
+      return data.url;
+    }
+    return '';
+  }
+
   function resetCandidateForm() {
     editingId = null;
-    document.querySelectorAll('#saveCandidateBtn').forEach(b => b.textContent = 'Save Candidate');
+    const btn = document.getElementById('saveCandidateBtn');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-save me-1"></i> Save Candidate';
     document.getElementById('formSrNumber').value = '';
     document.getElementById('formVoterName').value = '';
     document.getElementById('formVillage').value = '';
     document.getElementById('formMobile').value = '';
-    document.getElementById('formLogo').value = '';
-    document.getElementById('formVotes').value = '0';
+    clearImage('formPhotoFile', 'photoPreview', 'formPhoto', 'formPhotoUrl');
+    clearImage('formLogoFile', 'logoPreview', 'formLogo', 'formLogoUrl');
+  }
+
+  async function loadCandidateLogo(srNumber) {
+    try {
+      const res = await fetch(`/candidate-logo/${srNumber}`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.logo_url || '';
+      }
+    } catch (e) {}
+    return '';
+  }
+
+  function editCandidate(id) {
+    const m = allMembers.find(c => String(c.id) === String(id));
+    if (!m) return;
+    editingId = id;
+    document.getElementById('formSrNumber').value = m.sr_number || '';
+    document.getElementById('formVoterName').value = m.voter_name || '';
+    document.getElementById('formVillage').value = m.village || '';
+    document.getElementById('formMobile').value = m.mobile || '';
+    const photo = m.logo || '';
+    document.getElementById('formPhoto').value = photo;
+    document.getElementById('formPhotoUrl').value = photo;
+    if (photo) {
+      const preview = document.getElementById('photoPreview');
+      preview.src = photo;
+      preview.style.display = 'inline-block';
+    }
+    loadCandidateLogo(m.sr_number).then(logoUrl => {
+      document.getElementById('formLogo').value = logoUrl;
+      document.getElementById('formLogoUrl').value = logoUrl;
+      if (logoUrl) {
+        const preview = document.getElementById('logoPreview');
+        preview.src = logoUrl;
+        preview.style.display = 'inline-block';
+      }
+    });
+    const btn = document.getElementById('saveCandidateBtn');
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-pen me-1"></i> Update Candidate';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function deleteCandidate(id) {
+    if (!confirm('Are you sure you want to delete this candidate?')) return;
+    try {
+      const res = await fetch(`/votes/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (editingId === id) resetCandidateForm();
+        loadMembers();
+      }
+    } catch (e) {
+      console.error('Error deleting candidate:', e);
+    }
   }
 
   async function saveCandidate() {
-    const payload = {
-      sr_number: document.getElementById('formSrNumber').value,
-      voter_name: document.getElementById('formVoterName').value,
-      village: document.getElementById('formVillage').value,
-      mobile: document.getElementById('formMobile').value,
-      logo: document.getElementById('formLogo').value,
-      total_votes: parseInt(document.getElementById('formVotes').value) || 0
-    };
-
-    const method = editingId ? 'PUT' : 'POST';
-    const url = editingId ? `/votes/${editingId}` : '/votes';
+    const btn = document.getElementById('saveCandidateBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Saving...';
 
     try {
+      const photoUrl = await uploadFile(document.getElementById('formPhotoFile')) || document.getElementById('formPhoto').value;
+      const logoUrl = await uploadFile(document.getElementById('formLogoFile')) || document.getElementById('formLogo').value;
+
+      const srNumber = document.getElementById('formSrNumber').value;
+
+      const payload = {
+        sr_number: srNumber,
+        voter_name: document.getElementById('formVoterName').value,
+        village: document.getElementById('formVillage').value,
+        mobile: document.getElementById('formMobile').value,
+        logo: photoUrl,
+        total_votes: 0
+      };
+
+      const method = editingId ? 'PUT' : 'POST';
+      const url = editingId ? `/votes/${editingId}` : '/votes';
+
       const res = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
       if (res.ok) {
+        if (logoUrl) {
+          await fetch('/candidate-logo', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sr_number: srNumber, logo_url: logoUrl })
+          });
+        }
         resetCandidateForm();
         loadMembers();
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-save me-1"></i> Save Candidate';
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert('Error: ' + (err.error || 'Failed to save candidate'));
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-save me-1"></i> Save Candidate';
       }
     } catch (e) {
+      alert('Network error: ' + e.message);
       console.error('Error saving candidate:', e);
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-save me-1"></i> Save Candidate';
     }
   }
 
@@ -308,9 +484,19 @@
     } else {
       document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'inline-block');
     }
+    if (role === 'dashboard') {
+      document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = 'none');
+    } else {
+      document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = '');
+    }
   }
 
   window.addEventListener('load', () => {
+    const role = localStorage.getItem('userRole');
+    if (role !== 'admin') {
+      window.location = 'deshboard.html';
+      return;
+    }
     loadMembers();
     applyRoleVisibility();
   });

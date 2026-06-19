@@ -221,11 +221,8 @@
     
     <button class="btn-login" onclick="login()" id="loginBtn">Login</button>
     
-    <div class="footer-links">
-      <a href="authority.html">🛡️ Authority Panel</a>
-      <a href="deshboard.html">🏠 Dashboard</a>
-      <a href="register.html">🆕 Create Account</a>
-      <a href="reset.html">🔑 Forgot Password</a>
+    <div class="footer-links" style="justify-content: center;">
+      <a href="reset.html" style="flex: 0 1 auto;">🔑 Forgot Password</a>
     </div>
   </div>
 
@@ -304,6 +301,7 @@
         if (response.ok && data.success) {
           errorMsg.style.display = 'none';
           localStorage.setItem('userRole', data.role || 'user');
+          localStorage.setItem('username', data.username || username);
           window.location = 'deshboard.html';
         } else {
           errorMsg.textContent = 'Incorrect ID or password. Please try again.';

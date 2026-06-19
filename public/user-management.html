@@ -45,9 +45,17 @@
           <label class="form-label small fw-bold text-muted">Username</label>
           <input type="text" id="newUsername" class="form-control form-control-custom" placeholder="Enter username">
         </div>
-        <div class="mb-4">
+        <div class="mb-3">
           <label class="form-label small fw-bold text-muted">Password</label>
           <input type="password" id="newPassword" class="form-control form-control-custom" placeholder="Enter password">
+        </div>
+        <div class="mb-4">
+          <label class="form-label small fw-bold text-muted">Role</label>
+          <select id="newRole" class="form-select form-control-custom">
+            <option value="dashboard">Dashboard</option>
+            <option value="data_entry">Data Entry</option>
+            <option value="admin">Admin</option>
+          </select>
         </div>
         <button onclick="createUser()" class="btn btn-indigo w-100">Create Account</button>
         <div id="msg" class="mt-3 text-center"></div>
@@ -71,7 +79,13 @@
       <div class="modal-header"><h5 class="modal-title">Edit User</h5></div>
       <div class="modal-body">
         <input type="text" id="editUsername" class="form-control mb-3" placeholder="Username">
-        <input type="password" id="editPassword" class="form-control" placeholder="New Password (optional)">
+        <input type="password" id="editPassword" class="form-control mb-3" placeholder="New Password (optional)">
+        <label class="form-label small fw-bold text-muted mb-1">Role</label>
+        <select id="editRole" class="form-select form-control-custom">
+          <option value="dashboard">Dashboard</option>
+          <option value="data_entry">Data Entry</option>
+          <option value="admin">Admin</option>
+        </select>
       </div>
       <div class="modal-footer">
         <button class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
@@ -95,8 +109,9 @@
             <div class="text-muted small">Registered: ${new Date(u.created_at).toLocaleDateString()}</div>
           </div>
         </div>
-        <div>
-          <button class="btn btn-sm btn-light text-primary me-2" onclick="editUser(${u.id}, '${u.username}')"><i class="fas fa-edit"></i></button>
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge ${u.role === 'admin' ? 'bg-danger' : u.role === 'data_entry' ? 'bg-info' : 'bg-secondary'}">${u.role || 'dashboard'}</span>
+          <button class="btn btn-sm btn-light text-primary me-2" onclick='editUser(${u.id}, "${u.username.replace(/"/g, '&quot;')}", "${u.role || 'dashboard'}")'><i class="fas fa-edit"></i></button>
           <button class="btn btn-sm btn-light text-danger" onclick="deleteUser(${u.id})"><i class="fas fa-trash"></i></button>
         </div>
       </div>
@@ -104,20 +119,22 @@
   }
 
   let editingUserId = null;
-  function editUser(id, username) {
+  function editUser(id, username, role) {
     editingUserId = id;
     document.getElementById('editUsername').value = username;
     document.getElementById('editPassword').value = '';
+    document.getElementById('editRole').value = role || 'dashboard';
     new bootstrap.Modal(document.getElementById('editUserModal')).show();
   }
 
   async function saveUserChanges() {
     const username = document.getElementById('editUsername').value;
     const password = document.getElementById('editPassword').value;
+    const role = document.getElementById('editRole').value;
     const res = await fetch(`/users/${editingUserId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password, role })
     });
     if (res.ok) {
       bootstrap.Modal.getInstance(document.getElementById('editUserModal')).hide();
@@ -128,10 +145,11 @@
   async function createUser() {
     const username = document.getElementById('newUsername').value;
     const password = document.getElementById('newPassword').value;
+    const role = document.getElementById('newRole').value;
     const res = await fetch('/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
+      body: JSON.stringify({ username, password, role })
     });
     const data = await res.json();
     if (data.success) {
@@ -152,11 +170,15 @@
 
   function applyRoleVisibility() {
     const role = localStorage.getItem('userRole');
-    console.log('Current user role:', role);
     if (role !== 'admin') {
       document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'none');
     } else {
       document.querySelectorAll('.admin-only').forEach(el => el.style.display = 'inline-block');
+    }
+    if (role === 'dashboard') {
+      document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = 'none');
+    } else {
+      document.querySelectorAll('.no-dashboard').forEach(el => el.style.display = '');
     }
   }
 
