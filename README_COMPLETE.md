@@ -43,15 +43,15 @@ Body: { "password": "sardar123" }
 Response: { "success": true }
 ```
 
-#### Get All Members
+#### Get All Voters
 ```
-GET /votes
-Response: Array of member objects with all details
+GET /voters-list
+Response: Array of voter objects with all details
 ```
 
 #### Cast Vote
 ```
-POST /votes/:id/vote
+POST /voters-list/:id/vote
 Response: { "success": true, "message": "Vote recorded", "data": {...} }
 ```
 

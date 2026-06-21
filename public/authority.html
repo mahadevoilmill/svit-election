@@ -124,6 +124,36 @@
     </div>
   </div>
 
+  <div class="row g-4 mt-4 justify-content-center">
+    <div class="col-md-8">
+      <div class="card p-4 border-0 shadow-sm" style="border-radius: 20px;">
+        <div class="card-body">
+          <h4 class="fw-bold mb-3"><i class="fas fa-file-import me-2 text-success"></i> Bulk Upload Member Data</h4>
+          <p class="text-muted small mb-3">Upload an Excel file to bulk import or update member records. Supports formats: <strong>Sr. No.</strong>, <strong>English Name</strong>, <strong>Gujarati Name</strong>, <strong>M/F</strong>, <strong>Birthdate</strong>, <strong>Mobile No. 1</strong>, <strong>Address</strong>, <strong>Village</strong>, <strong>Photo</strong> etc.</p>
+          <div class="row g-3">
+            <div class="col-md-8">
+              <input id="excelFile" type="file" class="form-control" accept=".xlsx,.xls" />
+            </div>
+            <div class="col-md-4 d-flex align-items-center">
+              <button id="uploadExcelBtn" class="btn btn-success w-100" onclick="uploadExcel()">
+                <i class="fas fa-upload me-1"></i> Upload Excel
+              </button>
+            </div>
+            <div class="col-md-12 mt-2 d-flex align-items-center gap-2">
+              <a href="/member-template" class="btn btn-outline-primary">
+                <i class="fas fa-download me-1"></i> Download Excel Template
+              </a>
+              <span class="small text-muted">Use the sample file format for bulk member import.</span>
+            </div>
+            <div class="col-12">
+              <div id="excelUploadStatus" class="small text-muted">Select a file and click Upload.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="text-center mt-5">
     <button onclick="logout()" class="btn btn-outline-danger px-5 py-3 rounded-pill fw-bold">
       <i class="fas fa-sign-out-alt me-2"></i> LOGOUT FROM AUTHORITY SYSTEM
@@ -152,6 +182,44 @@
       document.getElementById('candidateCount').textContent = members.length;
       document.getElementById('voteCount').textContent = members.reduce((sum, m) => sum + (m.total_votes || 0), 0);
     } catch (e) { console.error(e); }
+  }
+
+  async function uploadExcel() {
+    const fileInput = document.getElementById('excelFile');
+    const status = document.getElementById('excelUploadStatus');
+    const uploadBtn = document.getElementById('uploadExcelBtn');
+
+    if (!fileInput.files.length) {
+      status.textContent = 'Please select an Excel file to upload.';
+      status.className = 'small text-danger';
+      return;
+    }
+
+    uploadBtn.disabled = true;
+    uploadBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Uploading...';
+    status.textContent = 'Uploading Excel file...';
+    status.className = 'small text-muted';
+
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+
+    try {
+      const response = await fetch('/upload-excel', { method: 'POST', body: formData });
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.detail || result.error || result.message || 'Upload failed');
+      }
+      status.textContent = result.message || 'Excel imported successfully.';
+      status.className = 'small text-success';
+      fileInput.value = '';
+      loadStats();
+    } catch (error) {
+      status.textContent = 'Upload error: ' + error.message;
+      status.className = 'small text-danger';
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.innerHTML = '<i class="fas fa-upload me-1"></i> Upload Excel';
+    }
   }
 
   function logout() { window.location = 'index.html'; }

@@ -16,7 +16,7 @@ function testSingleVote() {
   const options = {
     hostname: 'localhost',
     port: 5000,
-    path: '/votes/by-sr/vote',
+    path: '/voters-list/by-sr/vote',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -70,7 +70,7 @@ function testMultipleVotes() {
   const options = {
     hostname: 'localhost',
     port: 5000,
-    path: '/votes/by-sr/votes',
+    path: '/voters-list/by-sr/votes',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -131,7 +131,7 @@ function testBulkUpdate() {
   const options = {
     hostname: 'localhost',
     port: 5000,
-    path: '/votes/bulk-update',
+    path: '/voters-list/bulk-update',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

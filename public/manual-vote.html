@@ -246,9 +246,15 @@
             <span class="live-badge" id="srCountBadge"><div class="pulse"></div> 0 / 17 SR Selected</span>
           </div>
           <div class="card-body">
+            <div id="ballotEditBadge" class="d-none alert alert-info py-2 mb-2 d-flex justify-content-between align-items-center">
+              <span><i class="fas fa-edit me-1"></i> Editing <strong id="ballotEditLabel">Ballot #?</strong></span>
+              <button class="btn btn-sm btn-outline-secondary" onclick="cancelBatchEdit()"><i class="fas fa-times"></i> Cancel</button>
+            </div>
             <textarea id="multiSrNumbers" class="form-control form-control-custom mb-3" rows="5" placeholder="Enter SR numbers separated by commas or newlines..."></textarea>
+            <p class="text-muted small mb-3">Member ballots are anonymous and may include up to 17 unique SR numbers per submission.</p>
             <div class="d-flex gap-2">
-              <button class="btn btn-indigo flex-grow-1 btn-professional" onclick="castMultipleVotesBySRNumber()"><i class="fas fa-paper-plane me-1"></i> Cast Batch Votes</button>
+              <button id="castBatchBtn" class="btn btn-indigo flex-grow-1 btn-professional" onclick="castMultipleVotesBySRNumber()"><i class="fas fa-paper-plane me-1"></i> Cast Batch Votes</button>
+              <button id="updateBallotBtn" class="btn btn-success flex-grow-1 btn-professional d-none" onclick="updateBatchBallot()"><i class="fas fa-save me-1"></i> Update Ballot</button>
               <button class="btn btn-secondary btn-professional" onclick="resetMultiForm()"><i class="fas fa-undo"></i> Clear</button>
             </div>
 
@@ -328,6 +334,7 @@
 
 <script>
     let allMembers = [];
+    let ballotEditId = null;
     
     async function loadStats() {
       try {
@@ -394,6 +401,14 @@
     }
 
     async function castMultipleVotesBySRNumber() {
+      const username = localStorage.getItem('username');
+      const role = localStorage.getItem('userRole');
+      if (!username || !role) {
+        return showToast('You must be signed in to vote', true);
+      }
+      if (role !== 'member' && role !== 'admin') {
+        return showToast('Only member users can submit ballots', true);
+      }
       const input = document.getElementById('multiSrNumbers').value.trim();
       if (!input) return showToast('Enter SR numbers', true);
       
@@ -403,7 +418,7 @@
       const res = await fetch('/votes/by-sr/votes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sr_numbers: srs, entered_by: localStorage.getItem('username') })
+        body: JSON.stringify({ sr_numbers: srs, entered_by: username })
       });
       
       if (res.ok) {
@@ -451,13 +466,18 @@
         
         ballots.forEach((b, i) => {
           header.innerHTML += `
-            <th class="text-center">
+            <th class="text-center" data-ballot-id="${b.id}">
               <div class="d-flex flex-column align-items-center gap-1">
                 <span>B#${i+1}</span>
-                <span class="text-muted" style="font-size: 9px; line-height: 1.1;">by ${b.entered_by || 'Unknown'}</span>
-                <button class="btn btn-link btn-sm p-0 text-danger" onclick="deleteBallot(${b.id})" title="Delete Ballot">
-                  <i class="fas fa-times-circle"></i>
-                </button>
+                <span class="text-muted" style="font-size: 9px; line-height: 1.1;">Anonymous ballot</span>
+                <div class="d-flex gap-1">
+                  <button class="btn btn-link btn-sm p-0 text-primary admin-only" onclick="loadBallotToBatch(${b.id}, ${i+1})" title="Batch Edit this Ballot">
+                    <i class="fas fa-edit"></i>
+                  </button>
+                  <button class="btn btn-link btn-sm p-0 text-danger admin-only" onclick="deleteBallot(${b.id})" title="Delete Ballot">
+                    <i class="fas fa-times-circle"></i>
+                  </button>
+                </div>
               </div>
             </th>`;
         });
@@ -477,7 +497,7 @@
                 count = b.sr_numbers[String(m.sr_number)] || 0;
               }
               return `<td class="text-center p-1">
-                <input type="number" value="${count}" min="0" 
+                <input type="number" value="${count}" min="0" data-sr="${m.sr_number}"
                   class="form-control form-control-sm text-center mx-auto" 
                   style="width: 50px; padding: 2px;"
                   onchange="updateBallotCell(${b.id}, '${m.sr_number}', this.value, this)">
@@ -556,7 +576,74 @@
       setTimeout(() => t.style.display = 'none', 3000);
     }
 
+    function loadBallotToBatch(ballotId, displayNum) {
+      ballotEditId = ballotId;
+      const ballotIndex = document.querySelector(`#matrixHeader th[data-ballot-id="${ballotId}"]`);
+      if (!ballotIndex) return;
+      const cellIndex = Array.from(ballotIndex.parentNode.children).indexOf(ballotIndex);
+
+      const srs = [];
+      document.querySelectorAll('#matrixBody tr').forEach(row => {
+        const input = row.querySelector(`td:nth-child(${cellIndex + 1}) input`);
+        if (input) {
+          const sr = input.dataset.sr;
+          const val = parseInt(input.value) || 0;
+          if (val > 0) srs.push(sr);
+        }
+      });
+
+      document.getElementById('multiSrNumbers').value = srs.join(', ');
+      document.getElementById('ballotEditBadge').classList.remove('d-none');
+      document.getElementById('ballotEditLabel').textContent = `Ballot #${displayNum}`;
+      document.getElementById('castBatchBtn').classList.add('d-none');
+      document.getElementById('updateBallotBtn').classList.remove('d-none');
+      updateSrCount();
+    }
+
+    function cancelBatchEdit() {
+      ballotEditId = null;
+      document.getElementById('ballotEditBadge').classList.add('d-none');
+      document.getElementById('castBatchBtn').classList.remove('d-none');
+      document.getElementById('updateBallotBtn').classList.add('d-none');
+      document.getElementById('multiSrNumbers').value = '';
+      document.getElementById('multiResult').classList.add('d-none');
+      updateSrCount();
+    }
+
+    async function updateBatchBallot() {
+      const input = document.getElementById('multiSrNumbers').value.trim();
+      if (!input) return showToast('Enter SR numbers', true);
+      if (!ballotEditId) return;
+
+      const srs = input.split(/[,\n]+/).map(s => s.trim()).filter(s => s);
+      if (srs.length > 17) return showToast('Max 17 SR numbers allowed', true);
+
+      try {
+        const res = await fetch(`/ballots/${ballotEditId}/batch`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sr_numbers: srs })
+        });
+
+        if (res.ok) {
+          showToast('Ballot updated! ✅');
+          cancelBatchEdit();
+          loadStats();
+          loadBallotMatrix();
+        } else {
+          const err = await res.json();
+          showToast(err.error || 'Update failed', true);
+        }
+      } catch (e) {
+        showToast('Network error', true);
+      }
+    }
+
     function resetMultiForm() {
+      ballotEditId = null;
+      document.getElementById('ballotEditBadge').classList.add('d-none');
+      document.getElementById('castBatchBtn').classList.remove('d-none');
+      document.getElementById('updateBallotBtn').classList.add('d-none');
       document.getElementById('multiSrNumbers').value = '';
       document.getElementById('multiResult').classList.add('d-none');
       updateSrCount();

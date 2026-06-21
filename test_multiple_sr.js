@@ -16,7 +16,7 @@ function testMultipleSRNumbers() {
   const options = {
     hostname: 'localhost',
     port: 5000,
-    path: '/votes/by-sr/votes',
+    path: '/voters-list/by-sr/votes',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
