@@ -589,6 +589,48 @@ app.delete('/voters-list/:id', async (req, res) => {
   }
 });
 
+app.post('/admin/add-to-candidate-list', async (req, res) => {
+  const { member_id, candidate_number } = req.body;
+
+  try {
+    const { data: member, error: fetchError } = await supabase
+      .from('votes')
+      .select('*')
+      .eq('id', member_id)
+      .single();
+
+    if (fetchError || !member) {
+      return res.status(404).json({ error: 'Member not found' });
+    }
+
+    const payload = {
+      sr_number: member.sr_number,
+      voter_name: member.voter_name,
+      village: member.village,
+      mobile: member.mobile,
+      logo: member.logo,
+      total_votes: 0
+    };
+
+    if (candidate_number) {
+      payload.candidate_number = candidate_number;
+    }
+
+    const { data, error } = await supabase
+      .from('votes')
+      .insert([payload])
+      .select();
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({ success: true, message: 'Added to candidate list', data: data[0] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.get('/has-voted/:username', (req, res) => {
   const { username } = req.params;
   if (!username) return res.status(400).json({ error: 'Username required' });

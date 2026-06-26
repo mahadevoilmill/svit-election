@@ -395,9 +395,40 @@
           <div class="d-flex justify-content-between mb-2"><span>Mobile</span><span class="fw-bold">${m.mobile || '-'}</span></div>
           <div class="d-flex justify-content-between border-top pt-2 mt-2"><span>Total Votes</span><span class="fw-bold text-primary h4 mb-0">${m.total_votes || 0}</span></div>
         </div>
-        <button class="btn btn-secondary w-100 mt-4 btn-professional" data-bs-dismiss="modal">Close</button>
+        <div class="mt-3 admin-only">
+          <button class="btn btn-indigo w-100 mb-2 btn-professional" onclick="addToCandidateList(${m.id})" data-bs-dismiss="modal">
+            <i class="fas fa-user-plus me-1"></i> Add to Candidate List
+          </button>
+        </div>
+        <button class="btn btn-secondary w-100 mt-2 btn-professional" data-bs-dismiss="modal">Close</button>
       `;
       new bootstrap.Modal(document.getElementById('memberModal')).show();
+    }
+
+    async function addToCandidateList(memberId) {
+      const username = localStorage.getItem('username');
+      const role = localStorage.getItem('userRole');
+      if (!username || !role) {
+        return showToast('You must be signed in', true);
+      }
+      if (role !== 'admin') {
+        return showToast('Only admins can add to candidate list', true);
+      }
+
+      const res = await fetch('/admin/add-to-candidate-list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_id: memberId })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showToast(`Added ${data.data.sr_number} - ${data.data.voter_name} to candidate list! ✅`);
+        loadStats();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to add to candidate list', true);
+      }
     }
 
     async function castMultipleVotesBySRNumber() {
