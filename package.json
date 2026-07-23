@@ -1,12 +1,13 @@
 {
   "name": "svit-election",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Express backend for uploading Excel vote data to Supabase.",
+  "description": "SVIT Election Platform - Node.js Express backend and React Vite frontend.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "build:frontend": "npm run build --prefix frontend"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.1",
