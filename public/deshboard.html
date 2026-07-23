@@ -401,6 +401,7 @@
           <button class="btn btn-outline-primary btn-custom" onclick="addVoterRow()"><i class="fas fa-plus me-1"></i>Row</button>
           <button class="btn btn-outline-info btn-custom" onclick="promptAddColumn()"><i class="fas fa-columns me-1"></i>Column</button>
           <button class="btn btn-outline-warning btn-custom" id="bulkEditBtn" onclick="enterBulkEdit()" disabled><i class="fas fa-pen me-1"></i>Bulk</button>
+          <button class="btn btn-outline-success btn-custom admin-only" onclick="addSelectedToCandidates()" id="addToCandidatesBtn" disabled><i class="fas fa-user-plus me-1"></i>Add to Candidates</button>
         </div>
       </div>
     </div>
@@ -892,6 +893,19 @@
     if (cb.checked) bulkSelected.add(Number(id));
     else bulkSelected.delete(Number(id));
     updateBulkCount();
+    updateAddToCandidatesButton();
+  }
+
+  function toggleAllCheckboxes(cb) {
+    document.querySelectorAll('#votersTableBody input[type=checkbox]').forEach(c => c.checked = cb.checked);
+    bulkSelected.clear();
+    if (cb.checked) {
+      document.querySelectorAll('#votersTableBody tr[data-voter-id]').forEach(tr => {
+        bulkSelected.add(Number(tr.dataset.voterId));
+      });
+    }
+    updateBulkCount();
+    updateAddToCandidatesButton();
   }
 
   function updateBulkCount() {
@@ -1104,6 +1118,103 @@
     loadVoters();
     applyRoleVisibility();
     checkUserVoteStatus();
+  });
+
+  function updateAddToCandidatesButton() {
+    const btn = document.getElementById('addToCandidatesBtn');
+    if (!btn) return;
+    btn.disabled = bulkSelected.size === 0;
+  }
+
+  async function addSelectedToCandidates() {
+    if (bulkSelected.size === 0) return alert('Select at least one row to add to candidates');
+    
+    if (!confirm(`Add ${bulkSelected.size} selected voter(s) to candidate list?`)) return;
+    
+    document.getElementById('voterLoading').style.display = 'block';
+    
+    try {
+      const results = [];
+      const errors = [];
+      
+      for (const id of bulkSelected) {
+        const voterId = Number(id);
+        if (isNaN(voterId)) {
+          errors.push({ id, error: 'Invalid ID (not a number): "' + id + '"' });
+          continue;
+        }
+        
+        const v = allVoters.find(x => Number(x['Voter ID']) === voterId);
+        if (!v) {
+          errors.push({ id: voterId, error: 'Voter not found in database' });
+          continue;
+        }
+        
+        const payload = {
+          sr_number: v['Member No.'] || v['Member No'] || '',
+          voter_name: v['English Name'] || v['Name'] || '',
+          village: v['Village'] || '',
+          mobile: v['Mobile No. 1'] || v['Mobile'] || v['Mobile No.'] || '',
+          logo: v['Photo'] || v['photo'] || '',
+          total_votes: 0
+        };
+        
+        if (!payload.sr_number || !payload.voter_name) {
+          errors.push({ id, error: `Missing SR Number or Name. SR: "${payload.sr_number}", Name: "${payload.voter_name}"` });
+          continue;
+        }
+        
+        try {
+          const res = await fetch('/votes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          if (res.ok) {
+            results.push({ id, success: true });
+            
+            const deleteRes = await fetch(`/voters-list/${id}`, { method: 'DELETE' });
+            if (deleteRes.ok) {
+              v['Deleted'] = 'Yes';
+            }
+            
+          } else {
+            const err = await res.json();
+            errors.push({ id, error: err.error || `Failed to add (HTTP ${res.status})` });
+          }
+          
+        } catch (e) {
+          errors.push({ id, error: 'Network error: ' + e.message });
+        }
+      }
+      
+      if (results.length > 0) {
+        alert(`Successfully added ${results.length} voters to candidates`);
+        bulkSelected.clear();
+        exitBulkEdit();
+        loadVoters();
+        loadMembers();
+      }
+      
+      if (errors.length > 0) {
+        const errMsg = errors.map(e => `ID ${e.id}: ${e.error}`).join('\n');
+        const details = `\n\n${errors.length} error(s):\n${errMsg}`;
+        alert('Some items failed to add:' + details);
+      }
+      
+    } catch (e) {
+      alert('Error adding to candidates: ' + e.message);
+    }
+    
+    document.getElementById('voterLoading').style.display = 'none';
+    updateAddToCandidatesButton();
+  }
+
+  document.getElementById('voterSearchInput').addEventListener('input', (e) => {
+    currentVoterSearch = e.target.value;
+    renderVoters();
+    updateAddToCandidatesButton();
   });
 </script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
