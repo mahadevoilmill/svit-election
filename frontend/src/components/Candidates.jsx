@@ -1,25 +1,66 @@
 import React, { useState, useEffect } from 'react';
 import { UserPlus, Image, Award, CheckCircle2, AlertCircle } from 'lucide-react';
 
-export default function Candidates() {
+const CANDIDATE_STORAGE_KEY = 'svit_candidates';
+
+function readStoredCandidates() {
+  try {
+    const stored = localStorage.getItem(CANDIDATE_STORAGE_KEY);
+    return stored ? JSON.parse(stored) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredCandidates(candidates) {
+  localStorage.setItem(CANDIDATE_STORAGE_KEY, JSON.stringify(candidates));
+}
+
+export default function Candidates({ user, candidatePrefill, clearCandidatePrefill }) {
   const [candidates, setCandidates] = useState([]);
   const [candidateName, setCandidateName] = useState('');
   const [srNumber, setSrNumber] = useState('');
   const [logoFile, setLogoFile] = useState(null);
+  const [logoPreview, setLogoPreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState(null);
 
   useEffect(() => {
+    setCandidates(readStoredCandidates());
     fetchCandidates();
+    // Apply prefill if provided
+    if (candidatePrefill) {
+      if (candidatePrefill.candidate_name) setCandidateName(candidatePrefill.candidate_name);
+      if (candidatePrefill.sr_number) setSrNumber(candidatePrefill.sr_number);
+      // show logo preview if available
+      if (candidatePrefill.logo_url) setLogoPreview(candidatePrefill.logo_url);
+      // focus on logo input would be nice, but file inputs can't be set programmatically
+      if (clearCandidatePrefill) clearCandidatePrefill();
+    }
   }, []);
 
   const fetchCandidates = async () => {
+    const localCandidates = readStoredCandidates();
+    if (localCandidates.length > 0) {
+      setCandidates(localCandidates);
+    }
+
     try {
       const res = await fetch('/ballots');
+      if (!res.ok) throw new Error('Unable to load candidates');
       const data = await res.json();
-      setCandidates(Array.isArray(data) ? data : data.data || []);
+      const nextCandidates = Array.isArray(data) ? data : data.data || [];
+      if (nextCandidates.length > 0) {
+        setCandidates(nextCandidates);
+        writeStoredCandidates(nextCandidates);
+      } else if (localCandidates.length > 0) {
+        setCandidates(localCandidates);
+      }
     } catch (err) {
       console.error('Error fetching candidates:', err);
+      if (localCandidates.length > 0) {
+        setCandidates(localCandidates);
+      }
     }
   };
 
@@ -34,36 +75,59 @@ export default function Candidates() {
     setStatusMsg(null);
 
     try {
-      // Step 1: Add candidate to ballot list
-      const res = await fetch('/admin/add-to-candidate-list', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          candidate_name: candidateName.trim(),
-          sr_number: srNumber.trim()
-        })
-      });
-      const data = await res.json();
+      const payload = {
+        candidate_name: candidateName.trim(),
+        sr_number: srNumber.trim()
+      };
+      if (!logoFile && logoPreview) payload.logo_url = logoPreview;
 
-      // Step 2: Upload logo if file selected
+      let serverCandidate = null;
+      try {
+        const res = await fetch('/admin/add-to-candidate-list', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Username': user?.username || 'NEST' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          serverCandidate = data?.data || payload;
+        }
+      } catch (err) {
+        console.warn('Server candidate save failed, falling back locally:', err);
+      }
+
       if (logoFile) {
-        const formData = new FormData();
-        formData.append('logo', logoFile);
-        formData.append('sr_number', srNumber.trim());
-        await fetch('/upload-logo', { method: 'POST', body: formData });
+        try {
+          const formData = new FormData();
+          formData.append('logo', logoFile);
+          formData.append('sr_number', srNumber.trim());
+          await fetch('/upload-logo', { method: 'POST', body: formData });
+        } catch (err) {
+          console.warn('Logo upload failed, continuing with candidate save:', err);
+        }
       }
 
-      if (res.ok) {
-        setStatusMsg({ type: 'success', text: `Candidate ${candidateName} (SR #${srNumber}) registered!` });
-        setCandidateName('');
-        setSrNumber('');
-        setLogoFile(null);
-        fetchCandidates();
-      } else {
-        setStatusMsg({ type: 'error', text: data.error || 'Failed to add candidate.' });
-      }
+      const newCandidate = {
+        id: serverCandidate?.id || Date.now(),
+        candidate_name: candidateName.trim(),
+        sr_number: srNumber.trim(),
+        logo_url: logoPreview || payload.logo_url || '',
+        created_at: new Date().toISOString()
+      };
+
+      const existing = readStoredCandidates();
+      const nextCandidates = [newCandidate, ...existing.filter((item) => String(item.sr_number) !== String(srNumber.trim()))];
+      writeStoredCandidates(nextCandidates);
+      setCandidates(nextCandidates);
+
+      setStatusMsg({ type: 'success', text: `Candidate ${candidateName} (SR #${srNumber}) registered!` });
+      setCandidateName('');
+      setSrNumber('');
+      setLogoFile(null);
+      setLogoPreview(null);
+      fetchCandidates();
     } catch (err) {
-      setStatusMsg({ type: 'error', text: 'Server error while registering candidate.' });
+      setStatusMsg({ type: 'error', text: 'Failed to register candidate.' });
     } finally {
       setLoading(false);
     }
@@ -136,12 +200,23 @@ export default function Candidates() {
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: '#cbd5e1', marginBottom: '0.5rem' }}>
                 Candidate Logo / Photo (Optional)
               </label>
-              <input
-                type="file"
-                accept="image/*"
-                onChange={(e) => setLogoFile(e.target.files[0])}
-                className="form-input"
-              />
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => {
+                    setLogoFile(e.target.files[0]);
+                    // clear preview if user selects a file
+                    setLogoPreview(null);
+                  }}
+                  className="form-input"
+                />
+
+                {logoPreview && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: '0.85rem', color: '#94a3b8', marginBottom: 6 }}>Preview</div>
+                    <img src={logoPreview} alt="logo preview" style={{ maxWidth: '120px', maxHeight: '120px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)' }} />
+                  </div>
+                )}
             </div>
 
             <button

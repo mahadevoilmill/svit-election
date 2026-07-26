@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users, UserPlus, Trash2, Shield, AlertCircle, CheckCircle2 } from 'lucide-react';
 
-export default function UserManagement() {
+export default function UserManagement({ user }) {
   const [users, setUsers] = useState([]);
   const [newUsername, setNewUsername] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -15,7 +15,7 @@ export default function UserManagement() {
 
   const fetchUsers = async () => {
     try {
-      const res = await fetch('/users');
+      const res = await fetch('/users', { headers: { 'X-Username': user?.username || '' } });
       const data = await res.json();
       setUsers(Array.isArray(data) ? data : data.users || []);
     } catch (err) {
@@ -36,7 +36,7 @@ export default function UserManagement() {
     try {
       const res = await fetch('/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Username': user?.username || '' },
         body: JSON.stringify({
           username: newUsername.trim(),
           password: newPassword.trim(),
@@ -64,7 +64,7 @@ export default function UserManagement() {
     if (!window.confirm('Are you sure you want to delete this user?')) return;
 
     try {
-      const res = await fetch(`/users/${userId}`, { method: 'DELETE' });
+      const res = await fetch(`/users/${userId}`, { method: 'DELETE', headers: { 'X-Username': user?.username || '' } });
       if (res.ok) {
         setStatusMsg({ type: 'success', text: 'User removed.' });
         fetchUsers();

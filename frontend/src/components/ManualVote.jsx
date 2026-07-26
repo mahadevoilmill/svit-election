@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { FileSpreadsheet, Upload, Download, CheckCircle, AlertCircle, Send, FileText } from 'lucide-react';
 
-export default function ManualVote() {
+export default function ManualVote({ user }) {
   const [srNumber, setSrNumber] = useState('');
   const [votesInput, setVotesInput] = useState('');
   const [selectedFile, setSelectedFile] = useState(null);
@@ -26,9 +26,10 @@ export default function ManualVote() {
     try {
       const res = await fetch('/voters-list/by-sr/vote', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Username': user?.username || '' },
         body: JSON.stringify({
           sr_number: srNumber.trim(),
+          entered_by: user?.username || 'NEST',
           votes: votesArray
         })
       });
@@ -64,6 +65,7 @@ export default function ManualVote() {
     try {
       const res = await fetch('/upload-excel', {
         method: 'POST',
+        headers: { 'X-Username': user?.username || '' },
         body: formData
       });
       const data = await res.json();
@@ -164,7 +166,7 @@ export default function ManualVote() {
             </h3>
             
             <a
-              href="/member-template"
+              href="/voter-template"
               className="btn btn-secondary"
               style={{ padding: '6px 12px', fontSize: '0.75rem' }}
               download

@@ -51,9 +51,36 @@ function deleteUserRole(username) {
 }
 
 const MAX_VOTE_SELECTION = 17;
+const CANDIDATE_LIST_FILE = './candidate_list.json';
+
 function canUserVote(username) {
   const role = getUserRole(username);
   return role === 'member' || role === 'admin';
+}
+
+function loadCandidateList() {
+  try {
+    return JSON.parse(fs.readFileSync(CANDIDATE_LIST_FILE, 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
+function saveCandidateList(candidates) {
+  fs.writeFileSync(CANDIDATE_LIST_FILE, JSON.stringify(candidates, null, 2));
+}
+
+function requireAdmin(req, res, next) {
+  const username = req.headers['x-username'] || req.body?.username || req.query?.username;
+  if (!username) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const role = getUserRole(username);
+  if (role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  req.authUser = { username, role };
+  next();
 }
 
 // Ensure default admin has admin role
@@ -231,7 +258,7 @@ async function updateUserById(id, fields) {
   return { data, error };
 }
 
-app.post('/register', async (req, res) => {
+app.post('/register', requireAdmin, async (req, res) => {
   let { username, password, role } = req.body;
 
   try {
@@ -317,7 +344,7 @@ app.post('/reset-password', async (req, res) => {
   }
 });
 
-app.get('/users', async (req, res) => {
+app.get('/users', requireAdmin, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('users')
@@ -335,7 +362,7 @@ app.get('/users', async (req, res) => {
   }
 });
 
-app.delete('/users/:id', async (req, res) => {
+app.delete('/users/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   try {
     const { data: user } = await supabase
@@ -360,7 +387,7 @@ app.delete('/users/:id', async (req, res) => {
   }
 });
 
-app.put('/users/:id', async (req, res) => {
+app.put('/users/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
   const { username, password, role } = req.body;
   try {
@@ -380,7 +407,7 @@ app.put('/users/:id', async (req, res) => {
   }
 });
 
-app.post('/upload-excel', upload.single('file'), async (req, res) => {
+app.post('/upload-excel', requireAdmin, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -401,41 +428,67 @@ app.post('/upload-excel', upload.single('file'), async (req, res) => {
     }
 
     let rows = [];
-    let usedSheet = '';
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(sheet, { defval: '' });
       if (!data.length) continue;
 
-      const k = Object.keys(data[0]);
-      const voterIdKey = findKey(k, 'Voter ID', 'voter id', 'voter_id');
-      const nameKey = findKey(k, 'English Name', 'english name', 'name', 'voter name', 'voter_name', 'full name', 'name english', 'name gujarati');
+      const keys = Object.keys(data[0] || {});
+    const srKey = findKey(keys, 'SR No', 'SR. No.', 'sr number', 'sr_number', 'sr', 'Sr. No.');
+    const memberIdKey = findKey(keys, 'Member No.', 'Member ID', 'MemberID', 'member_id', 'member no');
+    const nameKey = findKey(keys, 'English Name', 'voter Name', 'Voter Name', 'voter name', 'name', 'full name');
+    const gujaratiNameKey = findKey(keys, 'Gujarati Name', 'gujarati name', 'Name Gujarati');
+    const genderKey = findKey(keys, 'M/F', 'Gender', 'gender', 'sex');
+    const birthdateKey = findKey(keys, 'Birthdate', 'Birth Date', 'DOB', 'Date of Birth');
+    const ageKey = findKey(keys, 'AGE', 'Age');
+    const mobileKey = findKey(keys, 'Mobile No. 1', 'Mobile No', 'Mobile no', 'mobile', 'mobile no');
+    const mobile2Key = findKey(keys, 'Mobile No 2', 'Mobile No.2', 'mobile2');
+    const addressKey = findKey(keys, 'Address', 'address');
+    const villageKey = findKey(keys, 'Village', 'village');
+    const emailKey = findKey(keys, 'Email ID', 'Email', 'email', 'Email ID');
+    const addressGujKey = findKey(keys, 'Addres_guj', 'Address Gujarati', 'address_guj');
+    const cityGujKey = findKey(keys, 'City_Gujarato', 'City Gujarati', 'city_guj');
+    const feeKey = findKey(keys, 'FEE Payment Date', 'Fee Payment', 'FeePaid', 'fee_payment');
+    const photoKey = findKey(keys, 'Photo', 'photo', 'Photo URL', 'PhotoURL');
+
       if (!nameKey) continue;
 
       const existing = readVoters();
-      let maxId = existing.reduce((m, v) => Math.max(m, Number(v['Voter ID']) || 0), 0);
+      let maxId = existing.reduce((m, v) => Math.max(m, Number(v.id) || Number(v['Voter ID']) || 0), 0);
 
-      const imported = data.map(row => {
-        maxId++;
-        const voter = {};
-        voter['Voter ID'] = maxId;
+      const imported = data
+        .map((row, index) => {
+          const name = row[nameKey];
+          if (!name && !row[srKey] && !row[addressKey] && !row[villageKey] && !row[mobileKey]) return null;
 
-        if (nameKey) {
-          voter['Name'] = typeof row[nameKey] === 'number' ? String(row[nameKey]) : String(row[nameKey] || '').trim();
-        }
+          maxId += 1;
+          const voter = {
+            id: maxId,
+            sr_number: row[srKey] ?? '',
+            member_id: row[memberIdKey] ?? '',
+            voter_name: typeof name === 'number' ? String(name) : String(name || '').trim(),
+            gujarati_name: row[gujaratiNameKey] ? String(row[gujaratiNameKey]) : '',
+            gender: row[genderKey] ? String(row[genderKey]) : '',
+            birthdate: row[birthdateKey] ? String(row[birthdateKey]) : '',
+            age: row[ageKey] ? String(row[ageKey]) : '',
+            mobile: row[mobileKey] ? String(row[mobileKey]) : '',
+            mobile2: row[mobile2Key] ? String(row[mobile2Key]) : '',
+            address: row[addressKey] ? String(row[addressKey]) : '',
+            village: row[villageKey] ? String(row[villageKey]) : '',
+            email: row[emailKey] ? String(row[emailKey]) : '',
+            address_guj: row[addressGujKey] ? String(row[addressGujKey]) : '',
+            city_guj: row[cityGujKey] ? String(row[cityGujKey]) : '',
+            fee_payment: row[feeKey] ? String(row[feeKey]) : '',
+            photo: row[photoKey] ? String(row[photoKey]) : '',
+            _importIndex: index
+          };
 
-        for (const col of k) {
-          const lower = col.toLowerCase().trim();
-          if (lower === nameKey?.toLowerCase().trim()) continue;
-          voter[col] = typeof row[col] === 'number' ? String(row[col]) : row[col];
-        }
-
-        return voter;
-      }).filter(v => v['Name']);
+          return voter;
+        })
+        .filter(Boolean);
 
       if (imported.length) {
         rows = imported;
-        usedSheet = sheetName;
         break;
       }
     }
@@ -452,10 +505,10 @@ app.post('/upload-excel', upload.single('file'), async (req, res) => {
     }
 
     const data = readVoters();
-    const existingMap = new Map(data.map(v => [Number(v['Voter ID']), v]));
+    const existingMap = new Map(data.map(v => [Number(v.id) || Number(v['Voter ID']), v]));
 
     for (const row of rows) {
-      const id = Number(row['Voter ID']);
+      const id = Number(row.id) || Number(row['Voter ID']);
       if (existingMap.has(id)) {
         Object.assign(existingMap.get(id), row);
       } else {
@@ -467,7 +520,7 @@ app.post('/upload-excel', upload.single('file'), async (req, res) => {
     writeVoters(data);
     fs.unlinkSync(req.file.path);
 
-    res.json({ success: true, message: 'Voters list imported', imported: rows.length });
+    res.json({ success: true, message: 'Voters list imported', imported: rows.length, processedCount: rows.length });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -477,6 +530,15 @@ app.get('/member-template', (req, res) => {
   const templatePath = require('path').resolve(__dirname, 'members_100.xlsx');
   if (fs.existsSync(templatePath)) {
     res.download(templatePath, 'member-template.xlsx');
+  } else {
+    res.status(404).json({ error: 'Template file not found' });
+  }
+});
+
+app.get('/voter-template', (req, res) => {
+  const templatePath = require('path').resolve(__dirname, 'templates', 'voter-template.xlsx');
+  if (fs.existsSync(templatePath)) {
+    res.download(templatePath, 'voter-template.xlsx');
   } else {
     res.status(404).json({ error: 'Template file not found' });
   }
@@ -518,122 +580,307 @@ app.get('/candidate-logo/:sr_number', (req, res) => {
 });
 
 app.get('/voters-list', async (req, res) => {
-  const { data, error } = await supabase
-    .from('votes')
-    .select('*')
-    .order('sr_number', { ascending: true });
-
-  if (error) {
-    return res.status(500).json(error);
+  try {
+    const data = readVoters();
+    res.json(data.map((voter) => ({ ...voter, id: voter.id ?? null })));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
   }
+});
 
-  res.json(data);
+// Export voters as CSV using template headers
+app.get('/voters-list/export.csv', async (req, res) => {
+  try {
+    const data = readVoters();
+    const headers = ['SR No','Member No','Voter Name','Gujarati Name','M/F','Birthdate','Age','Mobile No 1','Mobile No 2','Address','Village','Email ID','Address Guj','City Guj','Fee Payment Date','Photo'];
+    const rows = data.map(v => [
+      v.sr_number ?? '',
+      v.member_id ?? '',
+      v.voter_name ?? '',
+      v.gujarati_name ?? '',
+      v.gender ?? '',
+      v.birthdate ?? '',
+      v.age ?? '',
+      v.mobile ?? '',
+      v.mobile2 ?? '',
+      v.address ?? '',
+      v.village ?? '',
+      v.email ?? '',
+      v.address_guj ?? '',
+      v.city_guj ?? '',
+      v.fee_payment ?? '',
+      v.photo ?? ''
+    ]);
+
+    const csv = [headers.join(','), ...rows.map(r => r.map(cell => {
+      if (cell === null || cell === undefined) return '';
+      const s = String(cell).replace(/"/g, '""');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s}"` : s;
+    }).join(','))].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="voters-export.csv"');
+    res.send(csv);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.post('/voters-list', async (req, res) => {
-  const { sr_number, voter_name, logo, village, mobile, total_votes } = req.body;
-
-  if (!sr_number || !voter_name) {
-    return res.status(400).json({ error: 'SR Number and name are required' });
-  }
-
   try {
-    const { data, error } = await supabase
-      .from('votes')
-      .insert([{ sr_number, voter_name, logo, village, mobile, total_votes: total_votes || 0 }])
-      .select();
+    const payload = req.body || {};
+    const data = readVoters();
+    const id = (data.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1);
+    const newVoter = {
+      id,
+      sr_number: payload.sr_number ?? '',
+      member_id: payload.member_id ?? '',
+      voter_name: payload.voter_name ?? '',
+      gujarati_name: payload.gujarati_name ?? '',
+      gender: payload.gender ?? '',
+      birthdate: payload.birthdate ?? '',
+      age: payload.age ?? '',
+      mobile: payload.mobile ?? '',
+      mobile2: payload.mobile2 ?? '',
+      address: payload.address ?? '',
+      village: payload.village ?? '',
+      email: payload.email ?? '',
+      address_guj: payload.address_guj ?? '',
+      city_guj: payload.city_guj ?? '',
+      fee_payment: payload.fee_payment ?? '',
+      photo: payload.photo ?? '',
+      status: payload.status ?? 'active',
+      cancel_remarks: payload.cancel_remarks ?? ''
+    };
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    if (!newVoter.voter_name && !newVoter.sr_number) {
+      return res.status(400).json({ error: 'At least one field is required' });
     }
 
-    res.json({ success: true, message: 'Voter added', data: data[0] });
+    data.push(newVoter);
+    writeVoters(data);
+    res.json({ success: true, message: 'Voter added', voter: newVoter });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.put('/voters-list/:id', async (req, res) => {
-  const { id } = req.params;
-  const { sr_number, voter_name, logo, village, mobile, total_votes } = req.body;
-
-  if (!sr_number || !voter_name) {
-    return res.status(400).json({ error: 'SR Number and name are required' });
-  }
-
   try {
-    const { data, error } = await supabase
-      .from('votes')
-      .update({ sr_number, voter_name, logo, village, mobile, total_votes: total_votes || 0 })
-      .eq('id', id)
-      .select();
+    const id = Number(req.params.id);
+    const payload = req.body || {};
+    const data = readVoters();
+    const index = data.findIndex((item) => Number(item.id) === id);
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    if (index === -1) {
+      return res.status(404).json({ error: 'Voter not found' });
     }
 
-    res.json({ success: true, message: 'Voter updated', data: data[0] });
+    data[index] = {
+      ...data[index],
+      sr_number: payload.sr_number ?? data[index].sr_number ?? '',
+      member_id: payload.member_id ?? data[index].member_id ?? '',
+      voter_name: payload.voter_name ?? data[index].voter_name ?? '',
+      gujarati_name: payload.gujarati_name ?? data[index].gujarati_name ?? '',
+      gender: payload.gender ?? data[index].gender ?? '',
+      birthdate: payload.birthdate ?? data[index].birthdate ?? '',
+      age: payload.age ?? data[index].age ?? '',
+      mobile: payload.mobile ?? data[index].mobile ?? '',
+      mobile2: payload.mobile2 ?? data[index].mobile2 ?? '',
+      address: payload.address ?? data[index].address ?? '',
+      village: payload.village ?? data[index].village ?? '',
+      email: payload.email ?? data[index].email ?? '',
+      address_guj: payload.address_guj ?? data[index].address_guj ?? '',
+      city_guj: payload.city_guj ?? data[index].city_guj ?? '',
+      fee_payment: payload.fee_payment ?? data[index].fee_payment ?? '',
+      photo: payload.photo ?? data[index].photo ?? '',
+      status: payload.status ?? data[index].status ?? 'active',
+      cancel_remarks: payload.cancel_remarks ?? data[index].cancel_remarks ?? ''
+    };
+
+    writeVoters(data);
+    res.json({ success: true, message: 'Voter updated', voter: data[index] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.delete('/voters-list/:id', async (req, res) => {
-  const { id } = req.params;
-
   try {
-    const { error } = await supabase
-      .from('votes')
-      .delete()
-      .eq('id', id);
+    const id = Number(req.params.id);
+    const data = readVoters();
+    const filtered = data.filter((item) => Number(item.id) !== id);
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    if (filtered.length === data.length) {
+      return res.status(404).json({ error: 'Voter not found' });
     }
 
+    writeVoters(filtered);
     res.json({ success: true, message: 'Voter deleted' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/admin/add-to-candidate-list', async (req, res) => {
-  const { member_id, candidate_number } = req.body;
-
+app.get('/voters-list/check-member-id/:memberId', async (req, res) => {
   try {
-    const { data: member, error: fetchError } = await supabase
-      .from('votes')
-      .select('*')
-      .eq('id', member_id)
-      .single();
+    const memberId = req.params.memberId;
+    if (!memberId) {
+      return res.status(400).json({ error: 'Member ID is required' });
+    }
+    const data = readVoters();
+    const duplicates = data.filter(v => v.member_id && String(v.member_id).trim() === String(memberId).trim());
+    res.json({ exists: duplicates.length > 0, count: duplicates.length, duplicates });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    if (fetchError || !member) {
-      return res.status(404).json({ error: 'Member not found' });
+app.put('/voters-list/:id/cancel', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const { cancel_remarks } = req.body || {};
+    const data = readVoters();
+    const index = data.findIndex((item) => Number(item.id) === id);
+
+    if (index === -1) {
+      return res.status(404).json({ error: 'Voter not found' });
     }
 
-    const payload = {
-      sr_number: member.sr_number,
-      voter_name: member.voter_name,
-      village: member.village,
-      mobile: member.mobile,
-      logo: member.logo,
-      total_votes: 0
+    data[index] = {
+      ...data[index],
+      status: 'cancelled',
+      cancel_remarks: cancel_remarks || ''
     };
 
-    if (candidate_number) {
-      payload.candidate_number = candidate_number;
+    writeVoters(data);
+    res.json({ success: true, message: 'Voter cancelled', voter: data[index] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/voters-list/:id/restore', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const data = readVoters();
+    const index = data.findIndex((item) => Number(item.id) === id);
+
+    if (index === -1) {
+      return res.status(404).json({ error: 'Voter not found' });
     }
 
-    const { data, error } = await supabase
-      .from('votes')
-      .insert([payload])
-      .select();
+    data[index] = {
+      ...data[index],
+      status: 'active',
+      cancel_remarks: ''
+    };
 
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    writeVoters(data);
+    res.json({ success: true, message: 'Voter restored', voter: data[index] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/voters-list/bulk', async (req, res) => {
+  try {
+    const { voters } = req.body || {};
+    if (!Array.isArray(voters)) {
+      return res.status(400).json({ error: 'voters array is required' });
     }
 
-    res.json({ success: true, message: 'Added to candidate list', data: data[0] });
+    const data = readVoters();
+    const updates = []; 
+
+    voters.forEach((entry) => {
+      if (entry.id) {
+        const index = data.findIndex((item) => Number(item.id) === Number(entry.id));
+        if (index !== -1) {
+          data[index] = {
+            ...data[index],
+            sr_number: entry.sr_number ?? data[index].sr_number ?? '',
+            member_id: entry.member_id ?? data[index].member_id ?? '',
+            voter_name: entry.voter_name ?? data[index].voter_name ?? '',
+            gujarati_name: entry.gujarati_name ?? data[index].gujarati_name ?? '',
+            gender: entry.gender ?? data[index].gender ?? '',
+            birthdate: entry.birthdate ?? data[index].birthdate ?? '',
+            age: entry.age ?? data[index].age ?? '',
+            mobile: entry.mobile ?? data[index].mobile ?? '',
+            mobile2: entry.mobile2 ?? data[index].mobile2 ?? '',
+            address: entry.address ?? data[index].address ?? '',
+            village: entry.village ?? data[index].village ?? '',
+            email: entry.email ?? data[index].email ?? '',
+            address_guj: entry.address_guj ?? data[index].address_guj ?? '',
+            city_guj: entry.city_guj ?? data[index].city_guj ?? '',
+            fee_payment: entry.fee_payment ?? data[index].fee_payment ?? '',
+            photo: entry.photo ?? data[index].photo ?? '',
+            status: entry.status ?? data[index].status ?? 'active',
+            cancel_remarks: entry.cancel_remarks ?? data[index].cancel_remarks ?? ''
+          };
+          updates.push(data[index]);
+          return;
+        }
+      }
+
+      const newVoter = {
+        id: (data.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1),
+        sr_number: entry.sr_number ?? '',
+        member_id: entry.member_id ?? '',
+        voter_name: entry.voter_name ?? '',
+        gujarati_name: entry.gujarati_name ?? '',
+        gender: entry.gender ?? '',
+        birthdate: entry.birthdate ?? '',
+        age: entry.age ?? '',
+        mobile: entry.mobile ?? '',
+        mobile2: entry.mobile2 ?? '',
+        address: entry.address ?? '',
+        village: entry.village ?? '',
+        email: entry.email ?? '',
+        address_guj: entry.address_guj ?? '',
+        city_guj: entry.city_guj ?? '',
+        fee_payment: entry.fee_payment ?? '',
+        photo: entry.photo ?? '',
+        status: entry.status ?? 'active',
+        cancel_remarks: entry.cancel_remarks ?? ''
+      };
+      data.push(newVoter);
+      updates.push(newVoter);
+    });
+
+    writeVoters(data);
+    res.json({ success: true, message: 'Bulk update completed', updated: updates.length, voters: updates });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/admin/add-to-candidate-list', requireAdmin, async (req, res) => {
+  const { candidate_name, sr_number, member_id, candidate_number, logo_url } = req.body;
+  const trimmedName = String(candidate_name || '').trim();
+  const trimmedSrNumber = String(sr_number || '').trim();
+
+  if (!trimmedName || !trimmedSrNumber) {
+    return res.status(400).json({ error: 'Candidate name and SR number are required' });
+  }
+
+  try {
+    const candidates = loadCandidateList();
+    const payload = {
+      id: (candidates.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1),
+      candidate_name: trimmedName,
+      sr_number: trimmedSrNumber,
+      created_at: new Date().toISOString()
+    };
+
+    if (member_id) payload.member_id = member_id;
+    if (candidate_number) payload.candidate_number = candidate_number;
+    if (logo_url) payload.logo_url = logo_url;
+
+    candidates.push(payload);
+    saveCandidateList(candidates);
+
+    res.json({ success: true, message: 'Added to candidate list', data: payload });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -649,25 +896,30 @@ app.get('/has-voted/:username', (req, res) => {
 
 app.get('/ballots', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('ballots')
-      .select('*')
-      .order('created_at', { ascending: true });
+    const localCandidates = loadCandidateList();
 
-    if (error) {
-      // If table doesn't exist, return empty array instead of 500
-      if (error.code === 'PGRST204' || error.code === 'PGRST205' || error.message.includes('not found')) {
-        return res.json([]);
+    try {
+      const { data, error } = await supabase
+        .from('ballots')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (!error) {
+        const safeBallots = (data || [])
+          .filter((ballot) => ballot?.candidate_name || ballot?.sr_number || ballot?.sr_numbers)
+          .map((ballot) => {
+            const { entered_by, ...rest } = ballot;
+            return rest;
+          });
+
+        const merged = [...localCandidates, ...safeBallots];
+        return res.json(merged);
       }
-      return res.status(500).json(error);
+    } catch (error) {
+      console.warn('Supabase ballot lookup failed, falling back to local candidate list:', error.message);
     }
 
-    // Keep ballot content anonymous to clients
-    const safeBallots = (data || []).map(ballot => {
-      const { entered_by, ...rest } = ballot;
-      return rest;
-    });
-    res.json(safeBallots);
+    res.json(localCandidates);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1077,11 +1329,41 @@ app.post('/voters-list/bulk-update', async (req, res) => {
 // Voters list helpers — stored in JSON for performance, synced to trust.xlsx
 const VOTERS_FILE = require('path').resolve(__dirname, 'voters.json');
 const XLSX_FILE = require('path').resolve(__dirname, 'trust.xlsx');
+function normalizeVoterRecord(voter, fallbackId = null) {
+  const id = Number(voter.id ?? voter['Voter ID'] ?? fallbackId ?? 0);
+  return {
+    id: id || null,
+    sr_number: voter.sr_number ?? voter['SR No'] ?? voter['SR. No.'] ?? voter['Sr. No.'] ?? voter['Voter ID'] ?? voter['Member No.'] ?? '',
+    member_id: voter.member_id ?? voter['Member ID'] ?? voter['MemberID'] ?? voter['Member No.'] ?? '',
+    voter_name: voter.voter_name ?? voter['English Name'] ?? voter['Name'] ?? voter['voter name'] ?? '',
+    gujarati_name: voter.gujarati_name ?? voter['Gujarati Name'] ?? '',
+    gender: voter.gender ?? voter['M/F'] ?? '',
+    birthdate: voter.birthdate ?? voter['Birthdate'] ?? voter['Birth Date'] ?? '',
+    age: voter.age ?? voter['AGE'] ?? '',
+    mobile: voter.mobile ?? voter['Mobile No. 1'] ?? voter['Mobile no'] ?? voter['Mobile No'] ?? '',
+    mobile2: voter.mobile2 ?? voter['Mobile No 2'] ?? voter['Mobile No.2'] ?? '',
+    address: voter.address ?? voter['Address'] ?? '',
+    village: voter.village ?? voter['Village'] ?? '',
+    email: voter.email ?? voter['Email ID'] ?? '',
+    address_guj: voter.address_guj ?? voter['Addres_guj'] ?? '',
+    city_guj: voter.city_guj ?? voter['City_Gujarato'] ?? '',
+    fee_payment: voter.fee_payment ?? voter['Fee Payment'] ?? voter['FEE Payment Date'] ?? voter['FeePaid'] ?? '',
+    photo: voter.photo ?? voter['Photo'] ?? voter['Photo URL'] ?? voter['PhotoURL'] ?? '',
+    status: voter.status ?? 'active',
+    cancel_remarks: voter.cancel_remarks ?? ''
+  };
+}
+
 function readVoters() {
-  try { return JSON.parse(fs.readFileSync(VOTERS_FILE, 'utf8')); } catch { return []; }
+  try {
+    const raw = JSON.parse(fs.readFileSync(VOTERS_FILE, 'utf8'));
+    if (!Array.isArray(raw)) return [];
+    return raw.map((item, index) => normalizeVoterRecord(item, index + 1));
+  } catch { return []; }
 }
 function writeVoters(data) {
-  fs.writeFileSync(VOTERS_FILE, JSON.stringify(data, null, 2));
+  const normalized = (Array.isArray(data) ? data : []).map((item, index) => normalizeVoterRecord(item, index + 1));
+  fs.writeFileSync(VOTERS_FILE, JSON.stringify(normalized, null, 2));
   // Also sync to trust.xlsx Voters List sheet (non-blocking try)
   try {
     const wb = XLSX.readFile(XLSX_FILE);
@@ -1097,129 +1379,6 @@ function writeVoters(data) {
   }
 }
 
-app.get('/voters-list', (req, res) => {
-  try {
-    const data = readVoters();
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/voters-list', (req, res) => {
-  try {
-    const { Name, Village, Mobile, Remarks, 'Member No.': MemberNo, 'English Name': EnglishName, 'Gujarati Name': GujaratiName } = req.body;
-    const displayName = EnglishName || Name;
-    if (!displayName) return res.status(400).json({ error: 'Name is required' });
-    const data = readVoters();
-    const maxId = data.reduce((max, v) => Math.max(max, Number(v['Voter ID']) || 0), 0);
-    const newVoter = { 'Voter ID': maxId + 1 };
-    // Copy all fields from the existing first row's schema
-    if (data.length > 0) {
-      Object.keys(data[0]).forEach(k => {
-        if (k !== 'Voter ID') newVoter[k] = '';
-      });
-    }
-    // Override with provided values
-    newVoter['English Name'] = displayName;
-    if (GujaratiName) newVoter['Gujarati Name'] = GujaratiName;
-    if (Village) newVoter['Village'] = Village;
-    if (Mobile) newVoter['Mobile No. 1'] = Mobile;
-    if (Remarks) newVoter['Remarks'] = Remarks;
-    if (MemberNo) newVoter['Member No.'] = MemberNo;
-    data.push(newVoter);
-    writeVoters(data);
-    res.json({ success: true, voter: newVoter });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.put('/voters-list/:id', (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const data = readVoters();
-    const idx = data.findIndex(v => Number(v['Voter ID']) === id);
-    if (idx === -1) return res.status(404).json({ error: 'Voter not found' });
-    const allowed = Object.keys(data[idx]);
-    for (const key of Object.keys(req.body)) {
-      if (key !== 'Voter ID' && allowed.includes(key)) {
-        data[idx][key] = req.body[key];
-      }
-    }
-    writeVoters(data);
-    res.json({ success: true, voter: data[idx] });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/voters-list/:id', (req, res) => {
-  try {
-    const id = Number(req.params.id);
-    const data = readVoters();
-    const idx = data.findIndex(v => Number(v['Voter ID']) === id);
-    if (idx === -1) return res.status(404).json({ error: 'Voter not found' });
-    data[idx]['Deleted'] = 'Yes';
-    writeVoters(data);
-    res.json({ success: true, message: 'Voter deleted (soft)' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/voters-list/bulk-update', (req, res) => {
-  try {
-    const { updates } = req.body;
-    if (!Array.isArray(updates)) return res.status(400).json({ error: 'updates array required' });
-    const data = readVoters();
-    let updated = 0;
-    for (const u of updates) {
-      const id = Number(u['Voter ID']);
-      const idx = data.findIndex(v => Number(v['Voter ID']) === id);
-      if (idx === -1) continue;
-      for (const key of Object.keys(u)) {
-        if (key !== 'Voter ID') data[idx][key] = u[key];
-      }
-      updated++;
-    }
-    writeVoters(data);
-    res.json({ success: true, updated });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/voters-list/add-column', (req, res) => {
-  try {
-    const { column, defaultValue } = req.body;
-    if (!column || typeof column !== 'string') return res.status(400).json({ error: 'column name required' });
-    const data = readVoters();
-    for (const row of data) {
-      row[column] = defaultValue !== undefined ? defaultValue : '';
-    }
-    writeVoters(data);
-    res.json({ success: true, column, count: data.length });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.delete('/voters-list/column/:name', (req, res) => {
-  try {
-    const column = req.params.name;
-    if (!column) return res.status(400).json({ error: 'column name required' });
-    const data = readVoters();
-    for (const row of data) {
-      delete row[column];
-    }
-    writeVoters(data);
-    res.json({ success: true, column, count: data.length });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.originalUrl });
 });
@@ -1230,6 +1389,14 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
+});
+
+server.on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`\n❌ Error: Port ${PORT} is already in use by another process.`);
+    console.error(`Run 'fuser -k ${PORT}/tcp' to free up the port, then try 'npm run dev' again.\n`);
+    process.exit(1);
+  }
 });

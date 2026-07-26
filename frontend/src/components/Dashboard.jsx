@@ -70,6 +70,7 @@ export default function Dashboard({ user }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           sr_number: selectedVoter.sr_number || selectedVoter.srNo,
+          entered_by: user?.username || 'NEST',
           votes: selectedCandidates
         })
       });
@@ -90,9 +91,11 @@ export default function Dashboard({ user }) {
     }
   };
 
-  const filteredVoters = voters.filter(v => {
+  const activeVoters = voters.filter(v => v.status !== 'cancelled');
+
+  const filteredVoters = activeVoters.filter(v => {
     const sr = String(v.sr_number || v.srNo || '').toLowerCase();
-    const name = String(v.name || v.memberName || '').toLowerCase();
+    const name = String(v.name || v.memberName || v.voter_name || '').toLowerCase();
     const term = searchTerm.toLowerCase();
     return sr.includes(term) || name.includes(term);
   });
@@ -108,8 +111,8 @@ export default function Dashboard({ user }) {
             <Users size={28} />
           </div>
           <div>
-            <span style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Voters</span>
-            <h3 style={{ fontSize: '1.75rem', fontWeight: 800, margin: '2px 0 0', color: '#f8fafc' }}>{voters.length}</h3>
+            <span style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total Voters (Active)</span>
+            <h3 style={{ fontSize: '1.75rem', fontWeight: 800, margin: '2px 0 0', color: '#f8fafc' }}>{activeVoters.length}</h3>
           </div>
         </div>
 
@@ -184,7 +187,7 @@ export default function Dashboard({ user }) {
                       SR #{voter.sr_number || voter.srNo}
                     </div>
                     <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
-                      {voter.name || voter.memberName || 'Member'}
+                      {voter.voter_name || voter.name || voter.memberName || 'Member'}
                     </div>
                   </div>
                   {isVoted ? (
@@ -232,7 +235,7 @@ export default function Dashboard({ user }) {
 
           {selectedVoter && (
             <div style={{ padding: '0.75rem 1rem', background: 'rgba(99, 102, 241, 0.15)', borderRadius: 'var(--radius-md)', marginBottom: '1.25rem', border: '1px solid rgba(99, 102, 241, 0.3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span>Casting Vote For: <strong>SR #{selectedVoter.sr_number || selectedVoter.srNo} - {selectedVoter.name || 'Member'}</strong></span>
+              <span>Casting Vote For: <strong>SR #{selectedVoter.sr_number || selectedVoter.srNo} - {selectedVoter.voter_name || selectedVoter.name || 'Member'}</strong></span>
               <button onClick={() => setSelectedVoter(null)} style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', fontSize: '0.85rem' }}>Change Member</button>
             </div>
           )}

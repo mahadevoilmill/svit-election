@@ -6,7 +6,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
+    "dev": "npm run build:frontend && node server.js",
+    "dev:frontend": "npm run dev --prefix frontend",
     "build:frontend": "npm run build --prefix frontend"
   },
   "dependencies": {
