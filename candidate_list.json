@@ -1,0 +1,49 @@
+[
+  {
+    "id": 5,
+    "candidate_name": "PATEL HEMANGKUMAR JAYESHBHAI",
+    "sr_number": "1",
+    "created_at": "2026-08-01T06:29:14.552Z",
+    "gujarati_name": "પટેલ હેમાંગકુમાર જયેશભાઈ",
+    "member_id": "284",
+    "address": "SAHYOG SOCITY",
+    "mobile": "9427594558",
+    "photo": "/uploads/e6ea77f7de229bb8dad7e2392af95e87",
+    "logo_url": ""
+  },
+  {
+    "id": 6,
+    "candidate_name": "PATEL BHASKERBHAI CHANDUBHAI",
+    "sr_number": "2",
+    "created_at": "2026-08-01T06:32:03.767Z",
+    "gujarati_name": "પટેલ ભાસ્કરભાઈ ચંદુભાઈ",
+    "member_id": "1",
+    "address": "MURLIDHAR PULS MILL",
+    "mobile": "9825089069",
+    "photo": "/uploads/deaa907fd6a811248536060b805b5144",
+    "logo_url": ""
+  },
+  {
+    "id": 7,
+    "candidate_name": "THAKKAR RAKESHKUMAR JAGDISHCHANDRA",
+    "sr_number": "3",
+    "created_at": "2026-08-01T06:39:21.096Z",
+    "gujarati_name": "ઠક્કર રાકેશકુમાર જગદીશચંદ્ર",
+    "member_id": "298",
+    "address": "B/32,AMAR VATIKA SOCIETY,BH PAYAL CINEMA",
+    "mobile": "9879944395",
+    "photo": "/uploads/3e62550ba758693972934da540deeae3",
+    "logo_url": ""
+  },
+  {
+    "id": 8,
+    "candidate_name": "PATEL MEHULKUMAR MANUBHAI",
+    "sr_number": "4",
+    "created_at": "2026-08-01T06:40:52.946Z",
+    "gujarati_name": "પટેલ મેહુલકુમાર મનુભાઈ",
+    "member_id": "241",
+    "address": "RAMKUNJ,DHARTI PARK SOCIETY",
+    "mobile": "9925108669",
+    "photo": "/uploads/8d8af1ead72cec8e2398d34d11c4ef3e"
+  }
+]

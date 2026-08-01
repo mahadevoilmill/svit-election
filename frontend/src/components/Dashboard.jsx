@@ -6,13 +6,14 @@ export default function Dashboard({ user }) {
   const [ballots, setBallots] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCandidates, setSelectedCandidates] = useState([]);
+  const [nota, setNota] = useState(false);
   const [selectedVoter, setSelectedVoter] = useState(null);
   const [loading, setLoading] = useState(true);
   const [votingSuccess, setVotingSuccess] = useState('');
   const [votingError, setVotingError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const MAX_SELECTION = 17;
+  const MAX_SELECTION = null;
 
   useEffect(() => {
     fetchData();
@@ -38,10 +39,11 @@ export default function Dashboard({ user }) {
   };
 
   const handleCandidateToggle = (candidateId) => {
+    if (nota) setNota(false);
     if (selectedCandidates.includes(candidateId)) {
       setSelectedCandidates(selectedCandidates.filter(id => id !== candidateId));
     } else {
-      if (selectedCandidates.length >= MAX_SELECTION) {
+      if (MAX_SELECTION != null && selectedCandidates.length >= MAX_SELECTION) {
         setVotingError(`You can select a maximum of ${MAX_SELECTION} candidates.`);
         return;
       }
@@ -50,13 +52,23 @@ export default function Dashboard({ user }) {
     }
   };
 
+  const handleNotaToggle = () => {
+    if (nota) {
+      setNota(false);
+    } else {
+      setNota(true);
+      setSelectedCandidates([]);
+      setVotingError('');
+    }
+  };
+
   const handleCastVote = async () => {
     if (!selectedVoter) {
       setVotingError('Please select a voter / SR Number first.');
       return;
     }
-    if (selectedCandidates.length === 0) {
-      setVotingError('Please select at least 1 candidate.');
+    if (selectedCandidates.length === 0 && !nota) {
+      setVotingError('Please select at least 1 candidate or NOTA.');
       return;
     }
 
@@ -71,7 +83,8 @@ export default function Dashboard({ user }) {
         body: JSON.stringify({
           sr_number: selectedVoter.sr_number || selectedVoter.srNo,
           entered_by: user?.username || 'NEST',
-          votes: selectedCandidates
+          votes: selectedCandidates,
+          nota
         })
       });
       const data = await res.json();
@@ -79,6 +92,7 @@ export default function Dashboard({ user }) {
       if (res.ok && data.success) {
         setVotingSuccess(`Vote successfully cast for SR #${selectedVoter.sr_number || selectedVoter.srNo}!`);
         setSelectedCandidates([]);
+        setNota(false);
         setSelectedVoter(null);
         fetchData();
       } else {
@@ -207,15 +221,15 @@ export default function Dashboard({ user }) {
             <div>
               <h2 style={{ fontSize: '1.35rem', fontWeight: 800 }}>Official Election Ballot</h2>
               <p style={{ fontSize: '0.85rem', color: '#94a3b8' }}>
-                Select up to <strong style={{ color: '#818cf8' }}>{MAX_SELECTION}</strong> candidates. 
-                Selected: <strong style={{ color: '#34d399' }}>{selectedCandidates.length} / {MAX_SELECTION}</strong>
+                Select your preferred candidates. 
+                Selected: <strong style={{ color: '#34d399' }}>{selectedCandidates.length}</strong>
               </p>
             </div>
             
             <button
               className="btn btn-success"
               onClick={handleCastVote}
-              disabled={isSubmitting || !selectedVoter || selectedCandidates.length === 0}
+              disabled={isSubmitting || !selectedVoter || (selectedCandidates.length === 0 && !nota)}
             >
               <Vote size={18} /> {isSubmitting ? 'Casting Vote...' : 'Submit Official Vote'}
             </button>
@@ -277,6 +291,35 @@ export default function Dashboard({ user }) {
                 </div>
               );
             })}
+
+            {/* NOTA Card */}
+            <div
+              onClick={handleNotaToggle}
+              className="glass-card"
+              style={{
+                padding: '1.25rem',
+                cursor: 'pointer',
+                border: nota ? '2px solid #f59e0b' : '1px solid rgba(255, 255, 255, 0.08)',
+                background: nota ? 'rgba(245, 158, 11, 0.12)' : 'rgba(30, 41, 59, 0.5)',
+                position: 'relative'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
+                <span className="badge badge-admin">NOTA</span>
+                <input
+                  type="checkbox"
+                  checked={nota}
+                  onChange={() => {}}
+                  style={{ width: '18px', height: '18px', accentColor: '#f59e0b', cursor: 'pointer' }}
+                />
+              </div>
+              <div style={{ fontWeight: 700, fontSize: '1rem', color: '#f8fafc', marginBottom: '0.25rem' }}>
+                None of the Above (NOTA)
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#94a3b8' }}>
+                Cast vote without selecting any candidate
+              </div>
+            </div>
           </div>
         </div>
       </div>

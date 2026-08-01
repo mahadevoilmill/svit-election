@@ -62,7 +62,14 @@ export default function App() {
       try {
         const parsed = JSON.parse(storedUser);
         setUser(parsed);
-        setActiveTab('dashboard');
+        const validTabs = ['dashboard', 'manual-vote', 'voter-list', 'candidates', 'users'];
+        const adminTabs = ['manual-vote', 'voter-list', 'candidates', 'users'];
+        const storedTab = localStorage.getItem('svit_active_tab');
+        if (storedTab && validTabs.includes(storedTab) && (parsed.role === 'admin' || !adminTabs.includes(storedTab))) {
+          setActiveTab(storedTab);
+        } else {
+          setActiveTab('dashboard');
+        }
       } catch (err) {
         localStorage.removeItem('svit_user');
       }
@@ -75,6 +82,12 @@ export default function App() {
       applyTheme(initialColor);
     } catch (e) {}
   }, []);
+
+  useEffect(() => {
+    if (user && activeTab && activeTab !== 'login') {
+      try { localStorage.setItem('svit_active_tab', activeTab); } catch (e) {}
+    }
+  }, [activeTab, user]);
 
   const handleBgColorChange = (color) => {
     const nextColor = color || DEFAULT_THEME_COLOR;
@@ -102,6 +115,7 @@ export default function App() {
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('svit_user');
+    localStorage.removeItem('svit_active_tab');
     setActiveTab('login');
   };
 

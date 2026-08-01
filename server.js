@@ -14,7 +14,7 @@ app.use(express.static('public'));
 app.use('/uploads', express.static('uploads'));
 
 const supabaseUrl = process.env.SUPABASE_URL || (process.env.SUPABASE_PROJECT_ID ? `https://${process.env.SUPABASE_PROJECT_ID}.supabase.co` : null);
-const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 
 if (!supabaseUrl || !supabaseKey) {
   console.error('SUPABASE_URL or SUPABASE_PROJECT_ID and SUPABASE_KEY (or SUPABASE_SERVICE_ROLE_KEY) are required.');
@@ -98,6 +98,10 @@ function setBallotEntry(ballotId, enteredBy) {
   const log = loadBallotLog();
   log[String(ballotId)] = { entered_by: enteredBy, timestamp: new Date().toISOString() };
   saveBallotLog(log);
+}
+function hasUserVoted(username) {
+  const log = loadBallotLog();
+  return Object.values(log).some(e => e.entered_by === username);
 }
 function getBallotEntry(ballotId) {
   return loadBallotLog()[String(ballotId)] || null;
@@ -556,6 +560,127 @@ app.post('/upload-logo', upload.single('logo'), async (req, res) => {
   }
 });
 
+app.post('/upload-voter-photo', upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const url = `/uploads/${req.file.filename}`;
+    const voterId = req.body.voter_id;
+    const srNumber = req.body.sr_number;
+    const memberId = req.body.member_id;
+    if (voterId || srNumber || memberId) {
+      const voters = readVoters();
+      const idx = voters.findIndex(v =>
+        String(v.id) === String(voterId) ||
+        String(v.sr_number) === String(srNumber) ||
+        (memberId && String(v.member_id) === String(memberId))
+      );
+      if (idx !== -1) {
+        voters[idx].photo = url;
+        writeVoters(voters);
+      }
+    }
+    res.json({ success: true, url });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const MAX_BULK_PHOTOS_PER_REQUEST = 10000;
+
+app.post('/upload-voter-photos-bulk', (req, res) => {
+  upload.array('photos', MAX_BULK_PHOTOS_PER_REQUEST)(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+        return res.status(400).json({ error: `Too many files in one request. Maximum is ${MAX_BULK_PHOTOS_PER_REQUEST} photos per request.` });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'One or more photos exceed the allowed size limit.' });
+      }
+      return res.status(400).json({ error: `Upload failed: ${err.message || 'invalid request'}` });
+    }
+    try {
+      if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No files uploaded' });
+      }
+      const voters = readVoters();
+      let matched = 0;
+      let skipped = 0;
+      const results = [];
+      for (const file of req.files) {
+        const originalName = file.originalname.replace(/\.[^.]+$/, '').trim();
+        const srMatch = originalName.match(/(\d+)/);
+        if (srMatch) {
+          const num = srMatch[1];
+          let idx = voters.findIndex(v => String(v.member_id) === num);
+          let matchedBy = 'member_id';
+          if (idx === -1) {
+            idx = voters.findIndex(v => String(v.sr_number) === num);
+            matchedBy = 'sr_number';
+          }
+          if (idx !== -1) {
+            voters[idx].photo = `/uploads/${file.filename}`;
+            matched++;
+            results.push({ file: file.originalname, sr_number: num, matched_by: matchedBy, status: 'matched' });
+          } else {
+            skipped++;
+            results.push({ file: file.originalname, sr_number: num, status: 'no_voter_found' });
+          }
+        } else {
+          skipped++;
+          results.push({ file: file.originalname, status: 'no_id_in_name' });
+        }
+      }
+      if (matched > 0) writeVoters(voters);
+      res.json({ success: true, matched, skipped, total: req.files.length, results });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+});
+
+// Delete all voter photos (clear photo field and remove the uploaded files).
+// Files still referenced by candidates/logos are kept.
+app.post('/voters-list/clear-photos', async (req, res) => {
+  try {
+    const voters = readVoters();
+    const protectedFiles = new Set();
+    try {
+      for (const c of loadCandidateList()) {
+        for (const ref of [c.photo, c.logo_url]) {
+          if (ref && ref.startsWith('/uploads/')) protectedFiles.add(ref.split('/').pop());
+        }
+      }
+      for (const ref of Object.values(loadCandidateLogos())) {
+        if (ref && ref.startsWith('/uploads/')) protectedFiles.add(ref.split('/').pop());
+      }
+    } catch (e) { console.warn('clear-photos: failed to scan candidate refs:', e.message); }
+
+    const UPLOAD_DIR = require('path').resolve(__dirname, 'uploads');
+    let cleared = 0;
+    let removedFiles = 0;
+    for (const v of voters) {
+      if (v.photo && v.photo.startsWith('/uploads/')) {
+        const file = v.photo.split('/').pop();
+        if (file && !protectedFiles.has(file)) {
+          const p = require('path').join(UPLOAD_DIR, file);
+          try { if (fs.existsSync(p)) { fs.unlinkSync(p); removedFiles++; } } catch (e) { console.warn('clear-photos: failed to delete file', p, e.message); }
+        }
+        v.photo = '';
+        cleared++;
+      } else if (v.photo) {
+        v.photo = '';
+        cleared++;
+      }
+    }
+    writeVoters(voters);
+    res.json({ success: true, message: `Cleared photo for ${cleared} voter(s), removed ${removedFiles} file(s)` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Simple JSON file store for candidate party logos
 const CANDIDATE_LOGOS_FILE = './candidate_logos.json';
 function loadCandidateLogos() {
@@ -582,7 +707,30 @@ app.get('/candidate-logo/:sr_number', (req, res) => {
 app.get('/voters-list', async (req, res) => {
   try {
     const data = readVoters();
-    res.json(data.map((voter) => ({ ...voter, id: voter.id ?? null })));
+
+    let voteMap = {};
+    try {
+      let offset = 0;
+      while (true) {
+        const { data: votes, error } = await supabase
+          .from('votes')
+          .select('sr_number, total_votes')
+          .range(offset, offset + 999);
+        if (error || !votes || votes.length === 0) break;
+        for (const v of votes) {
+          voteMap[String(v.sr_number)] = v.total_votes || 0;
+        }
+        offset += votes.length;
+        if (votes.length < 1000) break;
+      }
+    } catch (e) { console.warn('Failed to fetch vote counts:', e.message); }
+
+    res.json(data.map((voter) => ({
+      ...voter,
+      id: voter.id ?? null,
+      total_votes: voteMap[String(voter.sr_number)] || 0,
+      has_voted: (voteMap[String(voter.sr_number)] || 0) > 0
+    })));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -631,6 +779,13 @@ app.post('/voters-list', async (req, res) => {
     const payload = req.body || {};
     const data = readVoters();
     const id = (data.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1);
+    const knownFields = ['sr_number','member_id','voter_name','gujarati_name','gender','birthdate','age','mobile','mobile2','address','village','email','address_guj','city_guj','fee_payment','photo','status','cancel_remarks'];
+    const extraFields = {};
+    for (const [k, v] of Object.entries(payload)) {
+      if (!knownFields.includes(k) && k !== 'id' && k !== 'total_votes' && v !== undefined && v !== null && v !== '') {
+        extraFields[k] = v;
+      }
+    }
     const newVoter = {
       id,
       sr_number: payload.sr_number ?? '',
@@ -650,7 +805,8 @@ app.post('/voters-list', async (req, res) => {
       fee_payment: payload.fee_payment ?? '',
       photo: payload.photo ?? '',
       status: payload.status ?? 'active',
-      cancel_remarks: payload.cancel_remarks ?? ''
+      cancel_remarks: payload.cancel_remarks ?? '',
+      ...extraFields
     };
 
     if (!newVoter.voter_name && !newVoter.sr_number) {
@@ -659,6 +815,36 @@ app.post('/voters-list', async (req, res) => {
 
     data.push(newVoter);
     writeVoters(data);
+
+    const sr = Number(newVoter.sr_number);
+    if (sr) {
+      try {
+        await supabase.from('votes').upsert({
+          id: newVoter.id,
+          sr_number: sr,
+          voter_name: newVoter.voter_name,
+          member_id: newVoter.member_id,
+          gujarati_name: newVoter.gujarati_name,
+          gender: newVoter.gender,
+          birthdate: newVoter.birthdate,
+          age: newVoter.age,
+          mobile: newVoter.mobile,
+          mobile2: newVoter.mobile2,
+          address: newVoter.address,
+          village: newVoter.village,
+          email: newVoter.email,
+          address_guj: newVoter.address_guj,
+          city_guj: newVoter.city_guj,
+          fee_payment: newVoter.fee_payment,
+          photo: newVoter.photo,
+          logo: newVoter.photo,
+          status: newVoter.status,
+          cancel_remarks: newVoter.cancel_remarks,
+          total_votes: 0
+        }, { onConflict: 'sr_number' });
+      } catch (e) { console.warn('Supabase sync failed for new voter:', e.message); }
+    }
+
     res.json({ success: true, message: 'Voter added', voter: newVoter });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -676,6 +862,12 @@ app.put('/voters-list/:id', async (req, res) => {
       return res.status(404).json({ error: 'Voter not found' });
     }
 
+    const extraFields = {};
+    for (const [k, v] of Object.entries(payload)) {
+      if (!['sr_number','member_id','voter_name','gujarati_name','gender','birthdate','age','mobile','mobile2','address','village','email','address_guj','city_guj','fee_payment','photo','status','cancel_remarks','id','total_votes'].includes(k) && v !== undefined) {
+        extraFields[k] = v;
+      }
+    }
     data[index] = {
       ...data[index],
       sr_number: payload.sr_number ?? data[index].sr_number ?? '',
@@ -695,10 +887,41 @@ app.put('/voters-list/:id', async (req, res) => {
       fee_payment: payload.fee_payment ?? data[index].fee_payment ?? '',
       photo: payload.photo ?? data[index].photo ?? '',
       status: payload.status ?? data[index].status ?? 'active',
-      cancel_remarks: payload.cancel_remarks ?? data[index].cancel_remarks ?? ''
+      cancel_remarks: payload.cancel_remarks ?? data[index].cancel_remarks ?? '',
+      ...extraFields
     };
 
     writeVoters(data);
+
+    const v = data[index];
+    const sr = Number(v.sr_number);
+    if (sr) {
+      try {
+        await supabase.from('votes').upsert({
+          id: v.id,
+          sr_number: sr,
+          voter_name: v.voter_name,
+          member_id: v.member_id,
+          gujarati_name: v.gujarati_name,
+          gender: v.gender,
+          birthdate: v.birthdate,
+          age: v.age,
+          mobile: v.mobile,
+          mobile2: v.mobile2,
+          address: v.address,
+          village: v.village,
+          email: v.email,
+          address_guj: v.address_guj,
+          city_guj: v.city_guj,
+          fee_payment: v.fee_payment,
+          photo: v.photo,
+          logo: v.photo,
+          status: v.status,
+          cancel_remarks: v.cancel_remarks
+        }, { onConflict: 'sr_number' });
+      } catch (e) { console.warn('Supabase sync failed for update:', e.message); }
+    }
+
     res.json({ success: true, message: 'Voter updated', voter: data[index] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -709,6 +932,7 @@ app.delete('/voters-list/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const data = readVoters();
+    const voter = data.find((item) => Number(item.id) === id);
     const filtered = data.filter((item) => Number(item.id) !== id);
 
     if (filtered.length === data.length) {
@@ -716,7 +940,37 @@ app.delete('/voters-list/:id', async (req, res) => {
     }
 
     writeVoters(filtered);
+
+    const sr = voter ? Number(voter.sr_number) : null;
+    if (sr) {
+      try { await supabase.from('votes').delete().eq('sr_number', sr); } catch (e) { console.warn('Supabase delete failed:', e.message); }
+    }
+
     res.json({ success: true, message: 'Voter deleted' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/voters-list/bulk-delete', async (req, res) => {
+  try {
+    const { ids } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'ids array is required' });
+    }
+    const idSet = new Set(ids.map(Number));
+    const data = readVoters();
+    const deletedVoters = data.filter((item) => idSet.has(Number(item.id)));
+    const filtered = data.filter((item) => !idSet.has(Number(item.id)));
+    const deleted = data.length - filtered.length;
+    writeVoters(filtered);
+
+    const srNumbers = deletedVoters.map(v => Number(v.sr_number)).filter(Boolean);
+    if (srNumbers.length) {
+      try { await supabase.from('votes').delete().in('sr_number', srNumbers); } catch (e) { console.warn('Supabase bulk delete failed:', e.message); }
+    }
+
+    res.json({ success: true, message: `${deleted} voter(s) deleted`, deleted });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -754,6 +1008,13 @@ app.put('/voters-list/:id/cancel', async (req, res) => {
     };
 
     writeVoters(data);
+
+    const v = data[index];
+    const sr = Number(v.sr_number);
+    if (sr) {
+      try { await supabase.from('votes').update({ status: 'cancelled', cancel_remarks: v.cancel_remarks }).eq('sr_number', sr); } catch (e) { console.warn('Supabase cancel sync failed:', e.message); }
+    }
+
     res.json({ success: true, message: 'Voter cancelled', voter: data[index] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -777,6 +1038,13 @@ app.put('/voters-list/:id/restore', async (req, res) => {
     };
 
     writeVoters(data);
+
+    const v = data[index];
+    const sr = Number(v.sr_number);
+    if (sr) {
+      try { await supabase.from('votes').update({ status: 'active', cancel_remarks: '' }).eq('sr_number', sr); } catch (e) { console.warn('Supabase restore sync failed:', e.message); }
+    }
+
     res.json({ success: true, message: 'Voter restored', voter: data[index] });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -791,7 +1059,8 @@ app.post('/voters-list/bulk', async (req, res) => {
     }
 
     const data = readVoters();
-    const updates = []; 
+    const updates = [];
+    const supabaseRecords = [];
 
     voters.forEach((entry) => {
       if (entry.id) {
@@ -819,6 +1088,19 @@ app.post('/voters-list/bulk', async (req, res) => {
             cancel_remarks: entry.cancel_remarks ?? data[index].cancel_remarks ?? ''
           };
           updates.push(data[index]);
+          const sr = Number(data[index].sr_number);
+          if (sr) {
+            supabaseRecords.push({
+              id: data[index].id, sr_number: sr, voter_name: data[index].voter_name,
+              member_id: data[index].member_id, gujarati_name: data[index].gujarati_name,
+              gender: data[index].gender, birthdate: data[index].birthdate, age: data[index].age,
+              mobile: data[index].mobile, mobile2: data[index].mobile2, address: data[index].address,
+              village: data[index].village, email: data[index].email, address_guj: data[index].address_guj,
+              city_guj: data[index].city_guj, fee_payment: data[index].fee_payment,
+              photo: data[index].photo, logo: data[index].photo, status: data[index].status,
+              cancel_remarks: data[index].cancel_remarks
+            });
+          }
           return;
         }
       }
@@ -846,9 +1128,27 @@ app.post('/voters-list/bulk', async (req, res) => {
       };
       data.push(newVoter);
       updates.push(newVoter);
+      const sr = Number(newVoter.sr_number);
+      if (sr) {
+        supabaseRecords.push({
+          id: newVoter.id, sr_number: sr, voter_name: newVoter.voter_name,
+          member_id: newVoter.member_id, gujarati_name: newVoter.gujarati_name,
+          gender: newVoter.gender, birthdate: newVoter.birthdate, age: newVoter.age,
+          mobile: newVoter.mobile, mobile2: newVoter.mobile2, address: newVoter.address,
+          village: newVoter.village, email: newVoter.email, address_guj: newVoter.address_guj,
+          city_guj: newVoter.city_guj, fee_payment: newVoter.fee_payment,
+          photo: newVoter.photo, logo: newVoter.photo, status: newVoter.status,
+          cancel_remarks: newVoter.cancel_remarks, total_votes: 0
+        });
+      }
     });
 
     writeVoters(data);
+
+    if (supabaseRecords.length) {
+      try { await supabase.from('votes').upsert(supabaseRecords, { onConflict: 'sr_number' }); } catch (e) { console.warn('Supabase bulk sync failed:', e.message); }
+    }
+
     res.json({ success: true, message: 'Bulk update completed', updated: updates.length, voters: updates });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -856,7 +1156,7 @@ app.post('/voters-list/bulk', async (req, res) => {
 });
 
 app.post('/admin/add-to-candidate-list', requireAdmin, async (req, res) => {
-  const { candidate_name, sr_number, member_id, candidate_number, logo_url } = req.body;
+  const { candidate_name, gujarati_name, sr_number, member_id, candidate_number, logo_url, address, mobile, photo } = req.body;
   const trimmedName = String(candidate_name || '').trim();
   const trimmedSrNumber = String(sr_number || '').trim();
 
@@ -873,14 +1173,60 @@ app.post('/admin/add-to-candidate-list', requireAdmin, async (req, res) => {
       created_at: new Date().toISOString()
     };
 
+    if (gujarati_name) payload.gujarati_name = String(gujarati_name).trim();
     if (member_id) payload.member_id = member_id;
     if (candidate_number) payload.candidate_number = candidate_number;
     if (logo_url) payload.logo_url = logo_url;
+    if (address) payload.address = address;
+    if (mobile) payload.mobile = mobile;
+    if (photo) payload.photo = photo;
 
     candidates.push(payload);
     saveCandidateList(candidates);
 
     res.json({ success: true, message: 'Added to candidate list', data: payload });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/candidates/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const payload = req.body || {};
+
+  try {
+    const candidates = loadCandidateList();
+    const idx = candidates.findIndex(c => Number(c.id) === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Candidate not found' });
+    }
+
+    for (const field of ['candidate_name', 'gujarati_name', 'sr_number', 'member_id', 'candidate_number', 'logo_url', 'address', 'mobile', 'photo']) {
+      if (payload[field] !== undefined) {
+        candidates[idx][field] = String(payload[field] ?? '').trim();
+      }
+    }
+
+    saveCandidateList(candidates);
+    res.json({ success: true, message: 'Candidate updated', data: candidates[idx] });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/candidates/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+
+  try {
+    const candidates = loadCandidateList();
+    const idx = candidates.findIndex(c => Number(c.id) === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Candidate not found' });
+    }
+
+    const [removed] = candidates.splice(idx, 1);
+    saveCandidateList(candidates);
+    res.json({ success: true, message: 'Candidate deleted', data: removed });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -897,6 +1243,12 @@ app.get('/has-voted/:username', (req, res) => {
 app.get('/ballots', async (req, res) => {
   try {
     const localCandidates = loadCandidateList();
+    const logoMap = loadCandidateLogos();
+    localCandidates.forEach((c) => {
+      if (c.sr_number != null && logoMap[String(c.sr_number)]) {
+        c.logo_url = logoMap[String(c.sr_number)];
+      }
+    });
 
     try {
       const { data, error } = await supabase
@@ -1082,8 +1434,8 @@ app.put('/ballots/:id/batch', async (req, res) => {
   }
 });
 
-app.post('/voters-list/by-sr/vote', async (req, res) => {
-  const { sr_number, entered_by } = req.body;
+ app.post('/voters-list/by-sr/vote', async (req, res) => {
+  const { sr_number, entered_by, nota } = req.body;
 
   if (!sr_number) {
     return res.status(400).json({ error: 'SR Number is required' });
@@ -1096,16 +1448,7 @@ app.post('/voters-list/by-sr/vote', async (req, res) => {
   }
 
   try {
-    const { data: existingBallot, error: existingError } = await supabase
-      .from('ballots')
-      .select('id')
-      .eq('entered_by', entered_by)
-      .maybeSingle();
-
-    if (existingError) {
-      return res.status(500).json({ error: existingError.message });
-    }
-    if (existingBallot) {
+    if (hasUserVoted(entered_by)) {
       return res.status(400).json({ error: 'You have already submitted a ballot' });
     }
 
@@ -1133,7 +1476,7 @@ app.post('/voters-list/by-sr/vote', async (req, res) => {
 
     const { data: ballotData, error: ballotError } = await supabase
       .from('ballots')
-      .insert({ sr_numbers: [String(sr_number)], entered_by })
+      .insert({ sr_numbers: nota ? ['NOTA'] : [String(sr_number)] })
       .select();
     if (ballotError) {
       console.error('❌ Failed to record ballot:', ballotError.message);
@@ -1169,16 +1512,7 @@ app.post('/voters-list/by-sr/votes', async (req, res) => {
   }
 
   try {
-    const { data: existingBallot, error: existingError } = await supabase
-      .from('ballots')
-      .select('id')
-      .eq('entered_by', entered_by)
-      .maybeSingle();
-
-    if (existingError) {
-      return res.status(500).json({ error: existingError.message });
-    }
-    if (existingBallot) {
+    if (hasUserVoted(entered_by)) {
       return res.status(400).json({ error: 'You have already submitted a ballot' });
     }
 
@@ -1224,7 +1558,7 @@ app.post('/voters-list/by-sr/votes', async (req, res) => {
     }
 
     if (processedSrNumbers.length > 0) {
-      const { data: ballotData, error: ballotError } = await supabase.from('ballots').insert({ sr_numbers: processedSrNumbers, entered_by }).select();
+      const { data: ballotData, error: ballotError } = await supabase.from('ballots').insert({ sr_numbers: processedSrNumbers }).select();
       if (ballotError) {
         console.error('❌ Failed to record multiple ballot:', ballotError.message);
       } else if (ballotData && ballotData[0]) {
