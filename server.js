@@ -3,6 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const fs = require('fs');
+const { spawn } = require('child_process');
 require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');
@@ -50,12 +51,80 @@ function deleteUserRole(username) {
   saveRoles(roles);
 }
 
+// Per-user page access assignments (which pages a user can see)
+const PAGES_FILE = './user_pages.json';
+const ROLE_DEFAULT_PAGES = {
+  admin: ['dashboard', 'results', 'manual-vote', 'voter-list', 'candidates', 'users'],
+  'data-entry': ['manual-vote', 'voter-list', 'candidates'],
+  member: ['dashboard', 'results'],
+  observer: ['dashboard', 'results'],
+  dashboard: ['dashboard']
+};
+const DATA_ENTRY_PAGES = ['manual-vote', 'voter-list', 'candidates'];
+function loadPages() {
+  try { return JSON.parse(fs.readFileSync(PAGES_FILE, 'utf8')); } catch { return {}; }
+}
+function savePages(pages) {
+  fs.writeFileSync(PAGES_FILE, JSON.stringify(pages, null, 2));
+}
+function getUserPages(username) {
+  const pages = loadPages();
+  return Array.isArray(pages[username]) && pages[username].length > 0 ? pages[username] : null;
+}
+function setUserPages(username, pages) {
+  const all = loadPages();
+  if (Array.isArray(pages) && pages.length > 0) {
+    all[username] = [...new Set(pages)];
+  } else {
+    delete all[username];
+  }
+  savePages(all);
+}
+function deleteUserPages(username) {
+  const all = loadPages();
+  delete all[username];
+  savePages(all);
+}
+function resolveUserPages(username, role) {
+  const assigned = getUserPages(username);
+  if (assigned) return assigned;
+  return ROLE_DEFAULT_PAGES[role] || ROLE_DEFAULT_PAGES.dashboard;
+}
+
 const MAX_VOTE_SELECTION = 17;
 const CANDIDATE_LIST_FILE = './candidate_list.json';
 
+function isDataEntryRole(role) {
+  return role === 'admin' || role === 'data-entry';
+}
+
 function canUserVote(username) {
   const role = getUserRole(username);
-  return role === 'member' || role === 'admin';
+  if (role === 'member' || isDataEntryRole(role)) return true;
+  const pages = resolveUserPages(username, role);
+  return Array.isArray(pages) && pages.some((p) => DATA_ENTRY_PAGES.includes(p));
+}
+
+function canRecordOffline(username) {
+  const role = getUserRole(username);
+  if (isDataEntryRole(role)) return true;
+  const pages = resolveUserPages(username, role);
+  return Array.isArray(pages) && pages.some((p) => DATA_ENTRY_PAGES.includes(p));
+}
+
+function requireDataEntry(req, res, next) {
+  const username = req.headers['x-username'] || req.body?.username || req.query?.username;
+  if (!username) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+  const role = getUserRole(username);
+  const pages = resolveUserPages(username, role);
+  const hasDataAccess = isDataEntryRole(role) || (Array.isArray(pages) && pages.some((p) => DATA_ENTRY_PAGES.includes(p)));
+  if (!hasDataAccess) {
+    return res.status(403).json({ error: 'Data entry or admin access required' });
+  }
+  req.authUser = { username, role, pages };
+  next();
 }
 
 function loadCandidateList() {
@@ -94,9 +163,9 @@ function loadBallotLog() {
 function saveBallotLog(log) {
   fs.writeFileSync(BALLOT_LOG_FILE, JSON.stringify(log, null, 2));
 }
-function setBallotEntry(ballotId, enteredBy) {
+function setBallotEntry(ballotId, enteredBy, castType = 'online') {
   const log = loadBallotLog();
-  log[String(ballotId)] = { entered_by: enteredBy, timestamp: new Date().toISOString() };
+  log[String(ballotId)] = { entered_by: enteredBy, cast_type: castType, timestamp: new Date().toISOString() };
   saveBallotLog(log);
 }
 function hasUserVoted(username) {
@@ -189,7 +258,7 @@ app.post('/login', async (req, res) => {
   try {
     // First check if it's the default admin
     if (username === DEFAULT_USERNAME && password === DEFAULT_PASSWORD) {
-      return res.json({ success: true, role: 'admin', username });
+      return res.json({ success: true, role: 'admin', username, pages: ROLE_DEFAULT_PAGES.admin });
     }
 
     // Then check database
@@ -204,19 +273,23 @@ app.post('/login', async (req, res) => {
       return res.status(401).json({ success: false });
     }
 
-    res.json({ success: true, role: getUserRole(data.username), username: data.username });
+    const role = getUserRole(data.username);
+    res.json({ success: true, role, username: data.username, pages: resolveUserPages(data.username, role) });
   } catch (error) {
     console.error('Login error:', error);
     res.status(401).json({ success: false });
   }
 });
 
-async function insertUser({ username, password, role }) {
+async function insertUser({ username, password, role, pages }) {
   const { data, error } = await supabase
     .from('users')
-    .insert({ username, password, role: role || 'dashboard' })
+    .insert({ username, password })
     .select();
-  if (!error && username) setUserRole(username, role || 'dashboard');
+  if (!error && username) {
+    setUserRole(username, role || 'dashboard');
+    if (Array.isArray(pages) && pages.length > 0) setUserPages(username, pages);
+  }
   return { data, error };
 }
 
@@ -243,6 +316,12 @@ async function updateUserById(id, fields) {
       delete roles[oldUsername];
       saveRoles(roles);
     }
+    const pages = loadPages();
+    if (Array.isArray(pages[oldUsername])) {
+      pages[newUsername] = pages[oldUsername];
+      delete pages[oldUsername];
+      savePages(pages);
+    }
   }
 
   if (newUsername) {
@@ -252,7 +331,6 @@ async function updateUserById(id, fields) {
   const dbFields = {};
   if (username) dbFields.username = username;
   if (fields.password) dbFields.password = fields.password;
-  if (role) dbFields.role = role;
 
   const { data, error } = await supabase
     .from('users')
@@ -263,7 +341,7 @@ async function updateUserById(id, fields) {
 }
 
 app.post('/register', requireAdmin, async (req, res) => {
-  let { username, password, role } = req.body;
+  let { username, password, role, pages } = req.body;
 
   try {
     if (!username || !password) {
@@ -290,7 +368,7 @@ app.post('/register', requireAdmin, async (req, res) => {
     }
 
     // Create new user
-    const { data, error } = await insertUser({ username, password, role });
+    const { data, error } = await insertUser({ username, password, role, pages });
 
     if (error) {
       console.error('❌ Registration database error:', error.message);
@@ -360,7 +438,10 @@ app.get('/users', requireAdmin, async (req, res) => {
     }
 
     const roles = loadRoles();
-    res.json(data.map(u => ({ ...u, role: roles[u.username] || 'dashboard' })));
+    res.json(data.map(u => {
+      const role = roles[u.username] || 'dashboard';
+      return { ...u, role, pages: resolveUserPages(u.username, role) };
+    }));
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -384,7 +465,10 @@ app.delete('/users/:id', requireAdmin, async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    if (user) deleteUserRole(user.username);
+    if (user) {
+      deleteUserRole(user.username);
+      deleteUserPages(user.username);
+    }
     res.json({ success: true, message: 'User deleted' });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -393,7 +477,7 @@ app.delete('/users/:id', requireAdmin, async (req, res) => {
 
 app.put('/users/:id', requireAdmin, async (req, res) => {
   const { id } = req.params;
-  const { username, password, role } = req.body;
+  const { username, password, role, pages } = req.body;
   try {
     const updateData = { username };
     if (password) updateData.password = password;
@@ -405,13 +489,21 @@ app.put('/users/:id', requireAdmin, async (req, res) => {
       return res.status(500).json({ error: error.message });
     }
 
-    res.json({ success: true, message: 'User updated', data: data[0] });
+    if (data && data[0]) {
+      const savedUsername = data[0].username || username;
+      const savedRole = role || getUserRole(savedUsername);
+      if (role) setUserRole(savedUsername, role);
+      if (Array.isArray(pages)) setUserPages(savedUsername, pages);
+      res.json({ success: true, message: 'User updated', data: { ...data[0], role: savedRole, pages: resolveUserPages(savedUsername, savedRole) } });
+    } else {
+      res.json({ success: true, message: 'User updated' });
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-app.post('/upload-excel', requireAdmin, upload.single('file'), async (req, res) => {
+app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
@@ -736,7 +828,216 @@ app.get('/voters-list', async (req, res) => {
   }
 });
 
-// Export voters as CSV using template headers
+app.get('/vote-stats', async (req, res) => {
+  try {
+    const { data: ballots, error } = await supabase
+      .from('ballots')
+      .select('id, created_at');
+    if (error) return res.status(500).json({ error: error.message });
+
+    const log = loadBallotLog();
+    let online = 0, offline = 0, unknown = 0;
+    for (const ballot of ballots || []) {
+      const entry = log[String(ballot.id)];
+      if (!entry) { unknown++; continue; }
+      if (entry.cast_type === 'offline') offline++;
+      else online++;
+    }
+
+    res.json({ total: (ballots || []).length, online, offline, unknown });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/election-results', async (req, res) => {
+  try {
+    const candidates = loadCandidateList();
+    const logoMap = loadCandidateLogos();
+    candidates.forEach((c) => {
+      if (c.sr_number != null && logoMap[String(c.sr_number)]) {
+        c.logo_url = logoMap[String(c.sr_number)];
+      }
+    });
+
+    let voteMap = {};
+    try {
+      let offset = 0;
+      while (true) {
+        const { data: votes, error } = await supabase
+          .from('votes')
+          .select('sr_number, total_votes')
+          .range(offset, offset + 999);
+        if (error || !votes || votes.length === 0) break;
+        for (const v of votes) {
+          voteMap[String(v.sr_number)] = v.total_votes || 0;
+        }
+        offset += votes.length;
+        if (votes.length < 1000) break;
+      }
+    } catch (e) { console.warn('Failed to fetch vote counts:', e.message); }
+
+    let onlineVoteMap = {};
+    let offlineVoteMap = {};
+    let onlineBallots = 0;
+    let offlineBallots = 0;
+    let unknownBallots = 0;
+    try {
+      const log = loadBallotLog();
+      let offset = 0;
+      while (true) {
+        const { data: ballots, error } = await supabase
+          .from('ballots')
+          .select('id, sr_numbers')
+          .range(offset, offset + 999);
+        if (error || !ballots || ballots.length === 0) break;
+        for (const ballot of ballots) {
+          const entry = log[String(ballot.id)];
+          const castType = entry?.cast_type === 'offline' ? 'offline' : (entry?.cast_type === 'online' ? 'online' : 'unknown');
+          if (castType === 'offline') offlineBallots++;
+          else if (castType === 'online') onlineBallots++;
+          else unknownBallots++;
+
+          let srs = [];
+          if (Array.isArray(ballot.sr_numbers)) {
+            srs = ballot.sr_numbers.map((s) => String(s));
+          } else if (ballot.sr_numbers && typeof ballot.sr_numbers === 'object') {
+            for (const [sr, count] of Object.entries(ballot.sr_numbers)) {
+              const c = Number(count) || 0;
+              for (let i = 0; i < c; i++) srs.push(String(sr));
+            }
+          }
+          for (const sr of srs) {
+            if (castType === 'offline') offlineVoteMap[sr] = (offlineVoteMap[sr] || 0) + 1;
+            else if (castType === 'online') onlineVoteMap[sr] = (onlineVoteMap[sr] || 0) + 1;
+          }
+        }
+        offset += ballots.length;
+        if (ballots.length < 1000) break;
+      }
+    } catch (e) { console.warn('Failed to fetch ballot breakdown:', e.message); }
+
+    const results = candidates
+      .map((candidate) => {
+        const sr = String(candidate.sr_number);
+        return {
+          ...candidate,
+          total_votes: voteMap[sr] || 0,
+          online_votes: onlineVoteMap[sr] || 0,
+          offline_votes: offlineVoteMap[sr] || 0
+        };
+      })
+      .sort((a, b) => (Number(b.total_votes) || 0) - (Number(a.total_votes) || 0));
+
+    res.json({
+      candidates: results,
+      total_votes_cast: results.reduce((sum, c) => sum + (Number(c.total_votes) || 0), 0),
+      online_votes_cast: results.reduce((sum, c) => sum + (Number(c.online_votes) || 0), 0),
+      offline_votes_cast: results.reduce((sum, c) => sum + (Number(c.offline_votes) || 0), 0),
+      ballots: {
+        total: onlineBallots + offlineBallots + unknownBallots,
+        online: onlineBallots,
+        offline: offlineBallots,
+        unknown: unknownBallots
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/cast-votes', async (req, res) => {
+  try {
+    const { data: ballots, error } = await supabase
+      .from('ballots')
+      .select('id, sr_numbers, created_at')
+      .order('created_at', { ascending: false });
+    if (error) return res.status(500).json({ error: error.message });
+
+    const log = loadBallotLog();
+    const voterMap = new Map(readVoters().map(v => [String(v.sr_number), v]));
+
+    const result = (ballots || []).map((ballot) => {
+      let srs = [];
+      let sr_counts = null;
+      if (Array.isArray(ballot.sr_numbers)) {
+        srs = ballot.sr_numbers.map(s => String(s));
+      } else if (ballot.sr_numbers && typeof ballot.sr_numbers === 'object') {
+        sr_counts = {};
+        for (const [sr, count] of Object.entries(ballot.sr_numbers)) {
+          const c = Number(count) || 0;
+          if (c > 0) {
+            sr_counts[String(sr)] = c;
+            srs.push(String(sr));
+          }
+        }
+      }
+
+      const entry = log[String(ballot.id)] || {};
+      const votersDetail = srs.map((sr) => {
+        const voter = voterMap.get(String(sr));
+        return {
+          sr_number: sr,
+          voter_name: voter ? (voter.voter_name || voter.name) : (sr === 'NOTA' ? 'NOTA' : `SR #${sr}`),
+          member_id: voter ? (voter.member_id || '') : ''
+        };
+      });
+
+      return {
+        id: ballot.id,
+        sr_numbers: sr_counts || srs,
+        voters: votersDetail,
+        cast_type: entry.cast_type || 'unknown',
+        entered_by: entry.entered_by || '',
+        created_at: ballot.created_at
+      };
+    });
+
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/vote-calculator', async (req, res) => {
+  const { member_count, candidate_count, votes } = req.body;
+  const memberCount = Number(member_count);
+  const candidateCount = Number(candidate_count);
+
+  if (!memberCount || !candidateCount || !Array.isArray(votes)) {
+    return res.status(400).json({ error: 'member_count, candidate_count and votes are required' });
+  }
+  if (votes.length < memberCount) {
+    return res.status(400).json({ error: `Please provide at least ${memberCount} votes (received ${votes.length})` });
+  }
+
+  const votesLine = votes.slice(0, memberCount).join(' ');
+  const input = `${memberCount}\n${candidateCount}\n${votesLine}\n`;
+
+  const proc = spawn('python3', ['vote_calculator.py'], { cwd: process.cwd() });
+  let output = '';
+  proc.stdout.on('data', (d) => { output += d; });
+  proc.stderr.on('data', (d) => { output += d; });
+
+  const timeout = setTimeout(() => proc.kill(), 15000);
+
+  proc.on('error', (err) => {
+    clearTimeout(timeout);
+    res.status(500).json({ error: `Failed to run vote_calculator.py: ${err.message}` });
+  });
+
+  proc.on('close', (code) => {
+    clearTimeout(timeout);
+    if (code !== 0) {
+      return res.status(500).json({ error: 'Vote calculator failed', output });
+    }
+    res.json({ success: true, output });
+  });
+
+  proc.stdin.write(input);
+  proc.stdin.end();
+});
+
 app.get('/voters-list/export.csv', async (req, res) => {
   try {
     const data = readVoters();
@@ -1155,7 +1456,7 @@ app.post('/voters-list/bulk', async (req, res) => {
   }
 });
 
-app.post('/admin/add-to-candidate-list', requireAdmin, async (req, res) => {
+app.post('/admin/add-to-candidate-list', requireDataEntry, async (req, res) => {
   const { candidate_name, gujarati_name, sr_number, member_id, candidate_number, logo_url, address, mobile, photo } = req.body;
   const trimmedName = String(candidate_name || '').trim();
   const trimmedSrNumber = String(sr_number || '').trim();
@@ -1190,7 +1491,7 @@ app.post('/admin/add-to-candidate-list', requireAdmin, async (req, res) => {
   }
 });
 
-app.put('/candidates/:id', requireAdmin, async (req, res) => {
+app.put('/candidates/:id', requireDataEntry, async (req, res) => {
   const id = Number(req.params.id);
   const payload = req.body || {};
 
@@ -1214,7 +1515,7 @@ app.put('/candidates/:id', requireAdmin, async (req, res) => {
   }
 });
 
-app.delete('/candidates/:id', requireAdmin, async (req, res) => {
+app.delete('/candidates/:id', requireDataEntry, async (req, res) => {
   const id = Number(req.params.id);
 
   try {
@@ -1250,28 +1551,27 @@ app.get('/ballots', async (req, res) => {
       }
     });
 
-    try {
-      const { data, error } = await supabase
-        .from('ballots')
-        .select('*')
-        .order('created_at', { ascending: true });
-
-      if (!error) {
-        const safeBallots = (data || [])
-          .filter((ballot) => ballot?.candidate_name || ballot?.sr_number || ballot?.sr_numbers)
-          .map((ballot) => {
-            const { entered_by, ...rest } = ballot;
-            return rest;
-          });
-
-        const merged = [...localCandidates, ...safeBallots];
-        return res.json(merged);
-      }
-    } catch (error) {
-      console.warn('Supabase ballot lookup failed, falling back to local candidate list:', error.message);
-    }
-
     res.json(localCandidates);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/ballots/new-empty', async (req, res) => {
+  const { entered_by } = req.body;
+  try {
+    const { data: ballotData, error: ballotError } = await supabase
+      .from('ballots')
+      .insert({ sr_numbers: [] })
+      .select();
+
+    if (ballotError) {
+      return res.status(500).json({ error: ballotError.message });
+    }
+    if (ballotData && ballotData[0]) {
+      setBallotEntry(ballotData[0].id, entered_by || 'admin', 'offline');
+    }
+    res.json({ success: true, ballot: ballotData[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1435,21 +1735,127 @@ app.put('/ballots/:id/batch', async (req, res) => {
 });
 
  app.post('/voters-list/by-sr/vote', async (req, res) => {
-  const { sr_number, entered_by, nota } = req.body;
+  const { sr_number, votes, entered_by, nota, cast_type } = req.body;
+  const castType = cast_type === 'offline' ? 'offline' : 'online';
+  const selectedVotes = Array.isArray(votes) ? votes.map((s) => String(s).trim()).filter(Boolean) : [];
+  const uniqueVotes = [...new Set(selectedVotes)];
+  const isNota = nota === true || nota === 'true';
 
-  if (!sr_number) {
-    return res.status(400).json({ error: 'SR Number is required' });
-  }
   if (!entered_by) {
     return res.status(403).json({ error: 'Voting requires a signed-in member' });
   }
   if (!canUserVote(entered_by)) {
     return res.status(403).json({ error: 'Only member users can cast votes' });
   }
+  if (castType === 'offline' && !canRecordOffline(entered_by)) {
+    return res.status(403).json({ error: 'Only admins can record offline votes' });
+  }
 
   try {
-    if (hasUserVoted(entered_by)) {
-      return res.status(400).json({ error: 'You have already submitted a ballot' });
+    if (!isNota && uniqueVotes.length === 0 && !sr_number) {
+      return res.status(400).json({ error: 'SR Number or vote list is required' });
+    }
+
+    if (castType === 'offline') {
+      if (isNota) {
+        // offline NOTA ballots are allowed for admin only
+      } else {
+        const { data: existingVoter, error: duplicateError } = await supabase
+          .from('votes')
+          .select('total_votes')
+          .eq('sr_number', String(sr_number || uniqueVotes[0]))
+          .single();
+        if (!duplicateError && existingVoter && (existingVoter.total_votes || 0) > 0) {
+          return res.status(400).json({ error: 'This voter has already submitted a ballot' });
+        }
+      }
+    } else {
+      if (hasUserVoted(entered_by)) {
+        return res.status(400).json({ error: 'You have already submitted a ballot' });
+      }
+    }
+
+    if (uniqueVotes.length > 0) {
+      if (uniqueVotes.length > MAX_VOTE_SELECTION) {
+        return res.status(400).json({ error: `Maximum of ${MAX_VOTE_SELECTION} candidates is allowed` });
+      }
+
+      const results = [];
+      const errors = [];
+      const processedSrNumbers = [];
+
+      for (const voteSr of uniqueVotes) {
+        try {
+          const { data: member, error: fetchError } = await supabase
+            .from('votes')
+            .select('id, total_votes')
+            .eq('sr_number', String(voteSr))
+            .single();
+
+          if (fetchError || !member) {
+            errors.push({ sr_number: voteSr, error: 'SR Number not found' });
+            continue;
+          }
+
+          const newVoteCount = (member.total_votes || 0) + 1;
+          const { data: updateData, error: updateError } = await supabase
+            .from('votes')
+            .update({ total_votes: newVoteCount })
+            .eq('id', member.id)
+            .select();
+
+          if (updateError) {
+            errors.push({ sr_number: voteSr, error: updateError.message });
+            continue;
+          }
+
+          if (updateData && updateData[0]) {
+            results.push({ sr_number: voteSr, success: true, data: updateData[0] });
+            processedSrNumbers.push(String(voteSr));
+          }
+        } catch (err) {
+          errors.push({ sr_number: voteSr, error: err.message });
+        }
+      }
+
+      if (processedSrNumbers.length > 0) {
+        const { data: ballotData, error: ballotError } = await supabase
+          .from('ballots')
+          .insert({ sr_numbers: processedSrNumbers })
+          .select();
+        if (ballotError) {
+          console.error('❌ Failed to record ballot:', ballotError.message);
+        } else if (ballotData && ballotData[0]) {
+          setBallotEntry(ballotData[0].id, entered_by, castType);
+        }
+      }
+
+      const response = {
+        success: true,
+        message: `Processed ${results.length} vote${results.length === 1 ? '' : 's'} successfully`,
+        processed: results.length,
+        results,
+        errors,
+        cast_type: castType
+      };
+      if (errors.length > 0) {
+        response.warning = `${errors.length} vote${errors.length === 1 ? '' : 's'} failed to process`;
+      }
+      return res.json(response);
+    }
+
+    if (isNota) {
+      const { data: ballotData, error: ballotError } = await supabase
+        .from('ballots')
+        .insert({ sr_numbers: ['NOTA'] })
+        .select();
+      if (ballotError) {
+        console.error('❌ Failed to record NOTA ballot:', ballotError.message);
+      } else if (ballotData && ballotData[0]) {
+        setBallotEntry(ballotData[0].id, entered_by, castType);
+      }
+
+      return res.json({ success: true, message: 'NOTA ballot recorded', cast_type: castType });
     }
 
     const { data: member, error: fetchError } = await supabase
@@ -1463,7 +1869,6 @@ app.put('/ballots/:id/batch', async (req, res) => {
     }
 
     const newVoteCount = (member.total_votes || 0) + 1;
-
     const { data, error: updateError } = await supabase
       .from('votes')
       .update({ total_votes: newVoteCount })
@@ -1476,22 +1881,23 @@ app.put('/ballots/:id/batch', async (req, res) => {
 
     const { data: ballotData, error: ballotError } = await supabase
       .from('ballots')
-      .insert({ sr_numbers: nota ? ['NOTA'] : [String(sr_number)] })
+      .insert({ sr_numbers: [String(sr_number)] })
       .select();
     if (ballotError) {
       console.error('❌ Failed to record ballot:', ballotError.message);
     } else if (ballotData && ballotData[0]) {
-      setBallotEntry(ballotData[0].id, entered_by);
+      setBallotEntry(ballotData[0].id, entered_by, castType);
     }
 
-    res.json({ success: true, message: 'Vote recorded', data: data[0] });
+    res.json({ success: true, message: 'Vote recorded', cast_type: castType, data: data[0] });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
 app.post('/voters-list/by-sr/votes', async (req, res) => {
-  let { sr_numbers, entered_by } = req.body;
+  let { sr_numbers, entered_by, cast_type } = req.body;
+  const castType = cast_type === 'offline' ? 'offline' : 'online';
 
   if (!sr_numbers || !Array.isArray(sr_numbers) || sr_numbers.length === 0) {
     return res.status(400).json({ error: 'SR Numbers array is required' });
@@ -1501,6 +1907,9 @@ app.post('/voters-list/by-sr/votes', async (req, res) => {
   }
   if (!canUserVote(entered_by)) {
     return res.status(403).json({ error: 'Only member users can cast votes' });
+  }
+  if (castType === 'offline' && !canRecordOffline(entered_by)) {
+    return res.status(403).json({ error: 'Only admins can record offline votes' });
   }
 
   const uniqueSrNumbers = [...new Set(sr_numbers.map(sr => String(sr).trim()).filter(sr => sr))];
@@ -1512,7 +1921,7 @@ app.post('/voters-list/by-sr/votes', async (req, res) => {
   }
 
   try {
-    if (hasUserVoted(entered_by)) {
+    if (castType !== 'offline' && hasUserVoted(entered_by)) {
       return res.status(400).json({ error: 'You have already submitted a ballot' });
     }
 
@@ -1562,7 +1971,7 @@ app.post('/voters-list/by-sr/votes', async (req, res) => {
       if (ballotError) {
         console.error('❌ Failed to record multiple ballot:', ballotError.message);
       } else if (ballotData && ballotData[0]) {
-        setBallotEntry(ballotData[0].id, entered_by);
+        setBallotEntry(ballotData[0].id, entered_by, castType);
       }
     }
 
@@ -1580,6 +1989,211 @@ app.post('/voters-list/by-sr/votes', async (req, res) => {
     }
 
     res.json(response);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/voters-list/by-sr/random-votes', requireDataEntry, async (req, res) => {
+  const { entered_by, mode, total_count, selected_candidates, candidate_counts, cast_type } = req.body;
+  const castType = cast_type === 'offline' ? 'offline' : 'online';
+
+  if (!entered_by) {
+    return res.status(403).json({ error: 'Voting requires a signed-in member' });
+  }
+  if (!canUserVote(entered_by)) {
+    return res.status(403).json({ error: 'Only member users can cast votes' });
+  }
+  if (castType === 'offline' && !canRecordOffline(entered_by)) {
+    return res.status(403).json({ error: 'Only admins can record offline votes' });
+  }
+
+  const candidates = Array.isArray(selected_candidates)
+    ? selected_candidates.map(c => String(c).trim()).filter(Boolean)
+    : [];
+  if (candidates.length === 0) {
+    return res.status(400).json({ error: 'Select at least one candidate' });
+  }
+
+  const allocation = [];
+  const countByCandidate = {};
+
+  if (mode === 'per_candidate') {
+    for (const sr of candidates) {
+      const n = Number(candidate_counts?.[sr]) || 0;
+      if (n < 0) {
+        return res.status(400).json({ error: 'Vote counts must be zero or more' });
+      }
+      if (n > 0) {
+        countByCandidate[sr] = (countByCandidate[sr] || 0) + n;
+        for (let i = 0; i < n; i++) allocation.push(sr);
+      }
+    }
+    if (allocation.length === 0) {
+      return res.status(400).json({ error: 'Enter at least one vote count for a selected candidate' });
+    }
+  } else {
+    const total = Number(total_count) || 0;
+    if (total <= 0) {
+      return res.status(400).json({ error: 'Enter a valid total number of votes' });
+    }
+    if (total > 5000) {
+      return res.status(400).json({ error: 'Maximum of 5000 votes per bulk run is allowed' });
+    }
+    for (let i = 0; i < total; i++) {
+      const sr = candidates[Math.floor(Math.random() * candidates.length)];
+      allocation.push(sr);
+      countByCandidate[sr] = (countByCandidate[sr] || 0) + 1;
+    }
+  }
+
+  for (let i = allocation.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [allocation[i], allocation[j]] = [allocation[j], allocation[i]];
+  }
+
+  try {
+    const { data: voteRows, error: fetchError } = await supabase
+      .from('votes')
+      .select('id, sr_number, total_votes');
+    if (fetchError) {
+      return res.status(500).json({ error: fetchError.message });
+    }
+
+    const rows = voteRows || [];
+    const rowBySr = new Map(rows.map(r => [String(r.sr_number), r]));
+
+    const missingCandidates = candidates.filter(sr => !rowBySr.has(sr));
+    if (missingCandidates.length > 0) {
+      return res.status(400).json({ error: `Candidate SR not found in votes table: ${missingCandidates.join(', ')}` });
+    }
+
+    const candidateSrs = new Set(candidates);
+    const pool = rows.filter(r => (Number(r.total_votes) || 0) === 0 && !candidateSrs.has(String(r.sr_number)));
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+
+    if (pool.length < allocation.length) {
+      return res.status(400).json({
+        error: `Only ${pool.length} random voters (who have not voted) are available, but ${allocation.length} votes were requested.`
+      });
+    }
+
+    const results = [];
+    const errors = [];
+
+    for (let i = 0; i < allocation.length; i++) {
+      const voter = pool[i];
+      const candSr = allocation[i];
+      const candRow = rowBySr.get(candSr);
+      try {
+        const newCount = (Number(candRow.total_votes) || 0) + 1;
+        const { error: candError } = await supabase
+          .from('votes')
+          .update({ total_votes: newCount })
+          .eq('id', candRow.id);
+        if (candError) throw candError;
+
+        const voterNewCount = (Number(voter.total_votes) || 0) + 1;
+        const { error: voterError } = await supabase
+          .from('votes')
+          .update({ total_votes: voterNewCount })
+          .eq('id', voter.id);
+        if (voterError) throw voterError;
+
+        const { data: ballotData, error: ballotError } = await supabase
+          .from('ballots')
+          .insert({ sr_numbers: [candSr] })
+          .select();
+        if (ballotError) throw ballotError;
+        if (ballotData && ballotData[0]) {
+          setBallotEntry(ballotData[0].id, entered_by, castType);
+        }
+
+        results.push({ sr_number: candSr, voter_sr: String(voter.sr_number), success: true });
+      } catch (e) {
+        errors.push({ sr_number: candSr, error: e.message });
+      }
+    }
+
+    const response = {
+      success: true,
+      message: `Casted ${results.length} bulk random vote${results.length === 1 ? '' : 's'} successfully`,
+      processed: results.length,
+      errors: errors.length,
+      distribution: countByCandidate,
+      voters_used: results.length,
+      results,
+      errors
+    };
+
+    if (errors.length > 0) {
+      response.warning = `${errors.length} votes failed to process`;
+    }
+
+    res.json(response);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/voters-list/by-sr/grid-vote', requireDataEntry, async (req, res) => {
+  const { sr_number, entered_by, cast_type } = req.body;
+  const castType = cast_type === 'offline' ? 'offline' : 'online';
+
+  if (!sr_number) {
+    return res.status(400).json({ error: 'Candidate SR Number is required' });
+  }
+  if (!entered_by) {
+    return res.status(403).json({ error: 'Voting requires a signed-in member' });
+  }
+  if (!canUserVote(entered_by)) {
+    return res.status(403).json({ error: 'Only member users can cast votes' });
+  }
+  if (castType === 'offline' && !canRecordOffline(entered_by)) {
+    return res.status(403).json({ error: 'Only admins can record offline votes' });
+  }
+
+  try {
+    const { data: member, error: fetchError } = await supabase
+      .from('votes')
+      .select('id, total_votes')
+      .eq('sr_number', String(sr_number))
+      .single();
+
+    if (fetchError || !member) {
+      return res.status(404).json({ error: 'Candidate SR Number not found' });
+    }
+
+    const newVoteCount = (member.total_votes || 0) + 1;
+    const { error: updateError } = await supabase
+      .from('votes')
+      .update({ total_votes: newVoteCount })
+      .eq('id', member.id);
+
+    if (updateError) {
+      return res.status(500).json({ error: updateError.message });
+    }
+
+    const { data: ballotData, error: ballotError } = await supabase
+      .from('ballots')
+      .insert({ sr_numbers: [String(sr_number)] })
+      .select();
+
+    if (ballotError) {
+      console.error('❌ Failed to record grid ballot:', ballotError.message);
+    } else if (ballotData && ballotData[0]) {
+      setBallotEntry(ballotData[0].id, entered_by, castType);
+    }
+
+    res.json({
+      success: true,
+      message: 'Vote recorded',
+      sr_number: String(sr_number),
+      ballot_id: ballotData && ballotData[0] ? ballotData[0].id : null
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

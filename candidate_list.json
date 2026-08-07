@@ -45,5 +45,48 @@
     "address": "RAMKUNJ,DHARTI PARK SOCIETY",
     "mobile": "9925108669",
     "photo": "/uploads/8d8af1ead72cec8e2398d34d11c4ef3e"
+  },
+  {
+    "id": 9,
+    "candidate_name": "PATEL HARDIK VASANTBHAI",
+    "sr_number": "5",
+    "created_at": "2026-08-02T06:04:55.425Z",
+    "gujarati_name": "પટેલ હાર્દિક વસંતભાઈ",
+    "member_id": "428",
+    "address": "GHANSHYAM PULSE MILL",
+    "mobile": "9974410609",
+    "photo": "/uploads/301e5459507305303304aa7c73b2e012"
+  },
+  {
+    "id": 10,
+    "candidate_name": "PATEL NAITIK MARKANDBHAI",
+    "sr_number": "6",
+    "created_at": "2026-08-02T06:05:52.546Z",
+    "gujarati_name": "પટેલ નૈતિક માર્કન્ડભાઈ",
+    "member_id": "642",
+    "address": "MANOR TEKARA,BEHIND HIGH SCHOOL ,GOKUDDHAM SOCIETY",
+    "mobile": "9898302922",
+    "photo": "/uploads/9ee1df736675e56bc6493d59e495fb61"
+  },
+  {
+    "id": 11,
+    "candidate_name": "PATEL HIRALBEN PRITESHBHAI",
+    "sr_number": "7",
+    "created_at": "2026-08-02T06:06:28.953Z",
+    "gujarati_name": "પટેલ હિરલબેન પ્રિતેશભાઇ",
+    "member_id": "2554",
+    "address": "MOTI KHADKI",
+    "photo": "/uploads/c99211128f7e08f8fe6653469f3b8b42"
+  },
+  {
+    "id": 12,
+    "candidate_name": "PATEL DISHA HARDIKBHAI",
+    "sr_number": "8",
+    "created_at": "2026-08-02T06:08:00.539Z",
+    "gujarati_name": "પટેલ દિશાબેન હાર્દિક",
+    "member_id": "429",
+    "address": "GHANSHYAM PULSE MILL",
+    "mobile": "9974410609",
+    "photo": "/uploads/1ece133e9ec7e0a439ebaf8228059fcf"
   }
 ]

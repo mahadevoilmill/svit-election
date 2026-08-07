@@ -12,6 +12,8 @@ export default function Dashboard({ user }) {
   const [votingSuccess, setVotingSuccess] = useState('');
   const [votingError, setVotingError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [castType, setCastType] = useState('online');
+  const [voteStats, setVoteStats] = useState({ total: 0, online: 0, offline: 0, unknown: 0 });
 
   const MAX_SELECTION = null;
 
@@ -22,15 +24,18 @@ export default function Dashboard({ user }) {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [votersRes, ballotsRes] = await Promise.all([
+      const [votersRes, ballotsRes, statsRes] = await Promise.all([
         fetch('/voters-list'),
-        fetch('/ballots')
+        fetch('/ballots'),
+        fetch('/vote-stats')
       ]);
       const votersData = await votersRes.json();
       const ballotsData = await ballotsRes.json();
+      const statsData = await statsRes.json();
 
       setVoters(Array.isArray(votersData) ? votersData : votersData.data || []);
       setBallots(Array.isArray(ballotsData) ? ballotsData : ballotsData.data || []);
+      setVoteStats(statsData || { total: 0, online: 0, offline: 0, unknown: 0 });
     } catch (err) {
       console.error('Error fetching data:', err);
     } finally {
@@ -38,17 +43,20 @@ export default function Dashboard({ user }) {
     }
   };
 
-  const handleCandidateToggle = (candidateId) => {
+  const getCandidateSr = (candidate) => String(candidate.sr_number ?? candidate.id ?? '');
+
+  const handleCandidateToggle = (candidate) => {
     if (nota) setNota(false);
-    if (selectedCandidates.includes(candidateId)) {
-      setSelectedCandidates(selectedCandidates.filter(id => id !== candidateId));
+    const candidateSr = getCandidateSr(candidate);
+    if (selectedCandidates.includes(candidateSr)) {
+      setSelectedCandidates(selectedCandidates.filter(id => id !== candidateSr));
     } else {
       if (MAX_SELECTION != null && selectedCandidates.length >= MAX_SELECTION) {
         setVotingError(`You can select a maximum of ${MAX_SELECTION} candidates.`);
         return;
       }
       setVotingError('');
-      setSelectedCandidates([...selectedCandidates, candidateId]);
+      setSelectedCandidates([...selectedCandidates, candidateSr]);
     }
   };
 
@@ -77,20 +85,30 @@ export default function Dashboard({ user }) {
     setVotingSuccess('');
 
     try {
-      const res = await fetch('/voters-list/by-sr/vote', {
+      const payload = {
+        entered_by: user?.username || 'NEST',
+        cast_type: castType
+      };
+
+      let endpoint = '/voters-list/by-sr/vote';
+
+      if (selectedCandidates.length > 0) {
+        endpoint = '/voters-list/by-sr/votes';
+        payload.sr_numbers = selectedCandidates;
+      } else if (nota) {
+        endpoint = '/voters-list/by-sr/vote';
+        payload.nota = true;
+      }
+
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sr_number: selectedVoter.sr_number || selectedVoter.srNo,
-          entered_by: user?.username || 'NEST',
-          votes: selectedCandidates,
-          nota
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setVotingSuccess(`Vote successfully cast for SR #${selectedVoter.sr_number || selectedVoter.srNo}!`);
+        setVotingSuccess(`Ballot generated and vote cast successfully for SR #${selectedVoter.sr_number || selectedVoter.srNo}!`);
         setSelectedCandidates([]);
         setNota(false);
         setSelectedVoter(null);
@@ -136,7 +154,10 @@ export default function Dashboard({ user }) {
           </div>
           <div>
             <span style={{ fontSize: '0.8rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Votes Cast</span>
-            <h3 style={{ fontSize: '1.75rem', fontWeight: 800, margin: '2px 0 0', color: '#f8fafc' }}>{totalVoted}</h3>
+            <h3 style={{ fontSize: '1.75rem', fontWeight: 800, margin: '2px 0 0', color: '#f8fafc' }}>{voteStats.total || totalVoted}</h3>
+            <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '2px' }}>
+              Online: <strong style={{ color: '#6ee7b7' }}>{voteStats.online}</strong> · Offline: <strong style={{ color: '#fbbf24' }}>{voteStats.offline}</strong>
+            </div>
           </div>
         </div>
 
@@ -226,13 +247,48 @@ export default function Dashboard({ user }) {
               </p>
             </div>
             
-            <button
-              className="btn btn-success"
-              onClick={handleCastVote}
-              disabled={isSubmitting || !selectedVoter || (selectedCandidates.length === 0 && !nota)}
-            >
-              <Vote size={18} /> {isSubmitting ? 'Casting Vote...' : 'Submit Official Vote'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', background: 'rgba(15, 23, 42, 0.6)', borderRadius: 'var(--radius-md)', padding: '3px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+                <button
+                  onClick={() => setCastType('online')}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 'calc(var(--radius-md) - 3px)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    background: castType === 'online' ? 'rgba(16, 185, 129, 0.25)' : 'transparent',
+                    color: castType === 'online' ? '#6ee7b7' : '#94a3b8'
+                  }}
+                >
+                  Online Casting
+                </button>
+                <button
+                  onClick={() => setCastType('offline')}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 'calc(var(--radius-md) - 3px)',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    background: castType === 'offline' ? 'rgba(245, 158, 11, 0.25)' : 'transparent',
+                    color: castType === 'offline' ? '#fbbf24' : '#94a3b8'
+                  }}
+                >
+                  Offline Casting
+                </button>
+              </div>
+
+              <button
+                className="btn btn-success"
+                onClick={handleCastVote}
+                disabled={isSubmitting || !selectedVoter || (selectedCandidates.length === 0 && !nota)}
+              >
+                <Vote size={18} /> {isSubmitting ? 'Casting Vote...' : 'Submit Official Vote'}
+              </button>
+            </div>
           </div>
 
           {votingSuccess && (
@@ -257,12 +313,13 @@ export default function Dashboard({ user }) {
           {/* Candidate Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem' }}>
             {ballots.map((candidate) => {
-              const isChecked = selectedCandidates.includes(candidate.id || candidate.sr_number);
+              const candidateSr = getCandidateSr(candidate);
+              const isChecked = selectedCandidates.includes(candidateSr);
 
               return (
                 <div
                   key={candidate.id || candidate.sr_number}
-                  onClick={() => handleCandidateToggle(candidate.id || candidate.sr_number)}
+                  onClick={() => handleCandidateToggle(candidate)}
                   className="glass-card"
                   style={{
                     padding: '1.25rem',

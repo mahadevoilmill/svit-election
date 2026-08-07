@@ -1,7 +1,19 @@
 import React from 'react';
-import { Vote, LayoutDashboard, FileSpreadsheet, Users, UserPlus, KeyRound, LogOut, List } from 'lucide-react';
+import { Vote, LayoutDashboard, FileSpreadsheet, Users, UserPlus, KeyRound, LogOut, List, BarChart3 } from 'lucide-react';
 
 export default function Navbar({ activeTab, setActiveTab, user, onLogout, bgColor, onBgColorChange, onResetBgColor }) {
+  const isAdmin = user?.role === 'admin';
+  const roleDefaults = {
+    admin: ['dashboard', 'results', 'manual-vote', 'voter-list', 'candidates', 'users'],
+    'data-entry': ['manual-vote', 'voter-list', 'candidates'],
+    member: ['dashboard', 'results'],
+    observer: ['dashboard', 'results'],
+    dashboard: ['dashboard']
+  };
+  const pages = isAdmin
+    ? roleDefaults.admin
+    : (Array.isArray(user?.pages) && user.pages.length > 0 ? user.pages : (roleDefaults[user?.role] || ['dashboard']));
+  const canSee = (p) => isAdmin || pages.includes(p);
   return (
     <nav className="glass-panel" style={{ margin: '1rem', padding: '0.8rem 1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '1rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
@@ -28,6 +40,7 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout, bgColo
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {canSee('dashboard') && (
         <button 
           className={`btn ${activeTab === 'dashboard' ? 'btn-primary' : 'btn-secondary'}`}
           onClick={() => setActiveTab('dashboard')}
@@ -35,8 +48,19 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout, bgColo
         >
           <LayoutDashboard size={16} /> Voting Dashboard
         </button>
+        )}
 
-        {user?.role === 'admin' && (
+        {canSee('results') && (
+        <button 
+          className={`btn ${activeTab === 'results' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setActiveTab('results')}
+          style={{ padding: '8px 16px', fontSize: '0.875rem' }}
+        >
+          <BarChart3 size={16} /> Results
+        </button>
+        )}
+
+        {canSee('manual-vote') && (
           <button 
             className={`btn ${activeTab === 'manual-vote' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setActiveTab('manual-vote')}
@@ -46,7 +70,7 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout, bgColo
           </button>
         )}
 
-        {user?.role === 'admin' && (
+        {canSee('voter-list') && (
           <button 
             className={`btn ${activeTab === 'voter-list' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setActiveTab('voter-list')}
@@ -56,7 +80,7 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout, bgColo
           </button>
         )}
 
-        {user?.role === 'admin' && (
+        {canSee('candidates') && (
           <button 
             className={`btn ${activeTab === 'candidates' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setActiveTab('candidates')}
@@ -66,7 +90,7 @@ export default function Navbar({ activeTab, setActiveTab, user, onLogout, bgColo
           </button>
         )}
 
-        {user?.role === 'admin' && (
+        {canSee('users') && (
           <button 
             className={`btn ${activeTab === 'users' ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => setActiveTab('users')}

@@ -1023,7 +1023,7 @@ const fileInputRef = useRef(null);
                             {isEditing ? 'Cancel' : 'Edit'}
                           </button>
 
-                          {user?.role === 'admin' && (
+                          {(user?.role === 'admin' || user?.role === 'data-entry') && (
                             <button onClick={() => handleMakeCandidate(v)} className="btn btn-success" style={{ padding: '5px 8px', fontSize: '0.7rem' }} title="Prefill candidate form">
                               Candidate
                             </button>

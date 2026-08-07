@@ -7,8 +7,34 @@ import Candidates from './components/Candidates';
 import VoterList from './components/VoterList';
 import UserManagement from './components/UserManagement';
 import ResetPassword from './components/ResetPassword';
+import Results from './components/Results';
 
 const DEFAULT_THEME_COLOR = '#090d16';
+
+const ROLE_DEFAULT_PAGES = {
+  admin: ['dashboard', 'results', 'manual-vote', 'voter-list', 'candidates', 'users'],
+  'data-entry': ['manual-vote', 'voter-list', 'candidates'],
+  member: ['dashboard', 'results'],
+  observer: ['dashboard', 'results'],
+  dashboard: ['dashboard']
+};
+
+function resolveUserPages(user) {
+  if (!user) return [];
+  if (user.role === 'admin') return ROLE_DEFAULT_PAGES.admin;
+  if (Array.isArray(user.pages) && user.pages.length > 0) return user.pages;
+  return ROLE_DEFAULT_PAGES[user.role] || ROLE_DEFAULT_PAGES.dashboard;
+}
+
+const TAB_ORDER = ['dashboard', 'results', 'manual-vote', 'voter-list', 'candidates'];
+
+function getLandingPage(user) {
+  const pages = resolveUserPages(user);
+  for (const tab of TAB_ORDER) {
+    if (pages.includes(tab)) return tab;
+  }
+  return 'dashboard';
+}
 
 function hexToRgb(hex) {
   const normalized = hex.replace('#', '');
@@ -62,13 +88,13 @@ export default function App() {
       try {
         const parsed = JSON.parse(storedUser);
         setUser(parsed);
-        const validTabs = ['dashboard', 'manual-vote', 'voter-list', 'candidates', 'users'];
-        const adminTabs = ['manual-vote', 'voter-list', 'candidates', 'users'];
+        const validTabs = ['dashboard', 'results', 'manual-vote', 'voter-list', 'candidates', 'users'];
         const storedTab = localStorage.getItem('svit_active_tab');
-        if (storedTab && validTabs.includes(storedTab) && (parsed.role === 'admin' || !adminTabs.includes(storedTab))) {
+        const allowedPages = resolveUserPages(parsed);
+        if (storedTab && validTabs.includes(storedTab) && (parsed.role === 'admin' || allowedPages.includes(storedTab))) {
           setActiveTab(storedTab);
         } else {
-          setActiveTab('dashboard');
+          setActiveTab(getLandingPage(parsed));
         }
       } catch (err) {
         localStorage.removeItem('svit_user');
@@ -109,19 +135,26 @@ export default function App() {
   const handleLoginSuccess = (userData) => {
     setUser(userData);
     localStorage.setItem('svit_user', JSON.stringify(userData));
-    setActiveTab('dashboard');
+    localStorage.setItem('username', userData.username);
+    localStorage.setItem('userRole', userData.role);
+    setActiveTab(getLandingPage(userData));
   };
 
   const handleLogout = () => {
     setUser(null);
     localStorage.removeItem('svit_user');
     localStorage.removeItem('svit_active_tab');
+    localStorage.removeItem('username');
+    localStorage.removeItem('userRole');
     setActiveTab('login');
   };
 
   if (!user && activeTab !== 'reset-password') {
     return <Login onLoginSuccess={handleLoginSuccess} setActiveTab={setActiveTab} />;
   }
+
+  const allowedPages = resolveUserPages(user);
+  const canSee = (tab) => user?.role === 'admin' || allowedPages.includes(tab);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', color: 'var(--color-text-primary)' }}>
@@ -136,10 +169,11 @@ export default function App() {
       />
 
       <main style={{ flex: 1, paddingBottom: '3rem' }}>
-        {activeTab === 'dashboard' && <Dashboard user={user} />}
-        {activeTab === 'manual-vote' && (user?.role === 'admin' ? <ManualVote user={user} /> : (setActiveTab('dashboard'), null))}
-        {activeTab === 'voter-list' && (user?.role === 'admin' ? <VoterList user={user} setActiveTab={setActiveTab} setCandidatePrefill={setCandidatePrefill} /> : (setActiveTab('dashboard'), null))}
-        {activeTab === 'candidates' && (user?.role === 'admin' ? <Candidates user={user} candidatePrefill={candidatePrefill} clearCandidatePrefill={() => setCandidatePrefill(null)} /> : (setActiveTab('dashboard'), null))}
+        {activeTab === 'dashboard' && (canSee('dashboard') ? <Dashboard user={user} /> : (setActiveTab(getLandingPage(user)), null))}
+        {activeTab === 'results' && (canSee('results') ? <Results user={user} /> : (setActiveTab('dashboard'), null))}
+        {activeTab === 'manual-vote' && (canSee('manual-vote') ? <ManualVote user={user} /> : (setActiveTab('dashboard'), null))}
+        {activeTab === 'voter-list' && (canSee('voter-list') ? <VoterList user={user} setActiveTab={setActiveTab} setCandidatePrefill={setCandidatePrefill} /> : (setActiveTab('dashboard'), null))}
+        {activeTab === 'candidates' && (canSee('candidates') ? <Candidates user={user} candidatePrefill={candidatePrefill} clearCandidatePrefill={() => setCandidatePrefill(null)} /> : (setActiveTab('dashboard'), null))}
         {activeTab === 'users' && (user?.role === 'admin' ? <UserManagement user={user} /> : (setActiveTab('dashboard'), null))}
         {activeTab === 'reset-password' && <ResetPassword setActiveTab={setActiveTab} />}
       </main>
