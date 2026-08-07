@@ -2491,6 +2491,17 @@ function writeVoters(data) {
   }
 }
 
+app.get('/api/health', (req, res) => {
+  const supabaseConfigured =
+    !!(process.env.SUPABASE_URL || process.env.SUPABASE_PROJECT_ID) &&
+    !!(process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY);
+  res.json({
+    status: 'ok',
+    supabaseConfigured,
+    envKeys: Object.keys(process.env).filter(k => k.startsWith('SUPABASE'))
+  });
+});
+
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found', path: req.originalUrl });
 });
