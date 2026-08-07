@@ -3,6 +3,7 @@ const cors = require('cors');
 const multer = require('multer');
 const XLSX = require('xlsx');
 const fs = require('fs');
+const path = require('path');
 const { spawn } = require('child_process');
 require('dotenv').config();
 
@@ -11,8 +12,8 @@ const { createClient } = require('@supabase/supabase-js');
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static('public'));
-app.use('/uploads', express.static('uploads'));
+app.use(express.static(path.resolve(__dirname, 'public')));
+app.use('/uploads', express.static(path.resolve(__dirname, 'uploads')));
 
 const supabaseUrl = process.env.SUPABASE_URL || (process.env.SUPABASE_PROJECT_ID ? `https://${process.env.SUPABASE_PROJECT_ID}.supabase.co` : null);
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
