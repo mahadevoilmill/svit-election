@@ -726,6 +726,11 @@ export default function ManualVote({ user }) {
                       <th key={ballot.id} style={{ padding: '0.5rem 0.4rem', textAlign: 'center', minWidth: '80px', borderLeft: '1px solid rgba(255,255,255,0.06)' }}>
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
                           <span style={{ fontWeight: 800 }}>B#{idx + 1}</span>
+                          {ballot.entered_by && (
+                            <span style={{ fontSize: '0.68rem', color: '#818cf8', maxWidth: '80px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`Entered by ${ballot.entered_by}`}>
+                              {ballot.entered_by}
+                            </span>
+                          )}
                           <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
                             <button
                               type="button"
@@ -836,6 +841,7 @@ export default function ManualVote({ user }) {
                 <thead style={{ position: 'sticky', top: 0, zIndex: 2, background: '#0f172a' }}>
                   <tr style={{ color: '#94a3b8', borderBottom: '1px solid rgba(255,255,255,0.15)' }}>
                     <th style={{ padding: '0.75rem 1rem', textAlign: 'left', width: '100px' }}>Ballot #</th>
+                    <th style={{ padding: '0.75rem 1rem', textAlign: 'center', width: '130px' }}>Entered By</th>
                     <th style={{ padding: '0.75rem 1rem', textAlign: 'center', width: '120px' }}>Actions</th>
                     {candidates.map((candidate) => {
                       const srStr = String(candidate.sr_number ?? candidate.id);
@@ -852,6 +858,9 @@ export default function ManualVote({ user }) {
                     return (
                       <tr key={ballot.id} style={{ color: '#e2e8f0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
                         <td style={{ padding: '0.6rem 1rem', fontWeight: 800 }}>Ballot {idx + 1}</td>
+                        <td style={{ padding: '0.6rem 1rem', textAlign: 'center', color: '#818cf8', fontWeight: 600 }}>
+                          {ballot.entered_by || '—'}
+                        </td>
                         <td style={{ padding: '0.6rem 1rem', textAlign: 'center' }}>
                           <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
                             <button

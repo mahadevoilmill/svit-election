@@ -24,34 +24,81 @@ if (!supabaseUrl || !supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ storage: multer.memoryStorage() });
 
 const DEFAULT_USERNAME = 'NEST';
 const DEFAULT_PASSWORD = 'sardar123';
 
-// Simple JSON file-based role store (no DB schema change needed)
-const ROLES_FILE = './user_roles.json';
-function loadRoles() {
-  try { return JSON.parse(fs.readFileSync(ROLES_FILE, 'utf8')); } catch { return {}; }
-}
-function saveRoles(roles) {
-  fs.writeFileSync(ROLES_FILE, JSON.stringify(roles, null, 2));
-}
-function getUserRole(username) {
-  return loadRoles()[username] || 'dashboard';
-}
-function setUserRole(username, role) {
-  const roles = loadRoles();
-  roles[username] = role || 'dashboard';
-  saveRoles(roles);
-}
-function deleteUserRole(username) {
-  const roles = loadRoles();
-  delete roles[username];
-  saveRoles(roles);
+// ---------------------------------------------------------------
+// Storage layer
+// ---------------------------------------------------------------
+// All "file backed" storets (roles, pages, candidates, logos, ballot
+// entry log and the voters list) are kept in an in-memory cache that is
+// hydrated from Supabase at boot and written through to Supabase on every
+// mutation. This makes the app run correctly on immutable serverless
+// runtimes (Vercel) where the local filesystem is read-only.
+const ASSET_BUCKET = process.env.SUPABASE_BUCKET || 'election-assets';
+
+async function uploadBufferToStorage(buffer, originalname, mimetype, folder = 'assets') {
+  const ext = String(originalname || '').match(/\.([a-zA-Z0-9]+)$/);
+  const suffix = ext ? ext[0].toLowerCase() : '';
+  const name = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${suffix}`;
+  const path = `${folder}/${name}`;
+  const { error } = await supabase.storage.from(ASSET_BUCKET).upload(path, buffer, {
+    contentType: mimetype || 'application/octet-stream',
+    upsert: true
+  });
+  if (error) {
+    throw new Error(`Storage upload failed: ${error.message}`);
+  }
+  const { publicUrl } = supabase.storage.from(ASSET_BUCKET).getPublicUrl(path);
+  return publicUrl;
 }
 
-// Per-user page access assignments (which pages a user can see)
+const STORE = {
+  roles: {},
+  pages: {},
+  candidates: [],
+  logos: {},
+  ballots: {},
+  voters: []
+};
+
+function persist(promise) {
+  Promise.resolve(promise).catch((e) => console.warn('Supabase store write failed:', e && e.message));
+}
+
+function readLegacyFile(file) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+// --- Roles ---
+const ROLES_FILE = './user_roles.json';
+function loadRoles() { return STORE.roles; }
+function saveRoles(roles) {
+  STORE.roles = roles || {};
+  persistRoles();
+}
+function persistRoles() {
+  const rows = Object.entries(STORE.roles).map(([username, role]) => ({ username, role }));
+  (async () => {
+    const { error: delErr } = await supabase.from('user_roles').delete().neq('username', '');
+    if (delErr) console.warn('Roles reset failed:', delErr.message);
+    if (rows.length) await supabase.from('user_roles').upsert(rows, { onConflict: 'username' });
+  })().catch((e) => console.warn('Supabase roles write failed:', e.message));
+}
+function getUserRole(username) { return STORE.roles[username] || 'dashboard'; }
+function setUserRole(username, role) {
+  const r = role || 'dashboard';
+  STORE.roles[username] = r;
+  persist(supabase.from('user_roles').upsert({ username, role: r }, { onConflict: 'username' }));
+}
+function deleteUserRole(username) {
+  delete STORE.roles[username];
+  persist(supabase.from('user_roles').delete().eq('username', username));
+}
+
+// --- Pages ---
 const PAGES_FILE = './user_pages.json';
 const ROLE_DEFAULT_PAGES = {
   admin: ['dashboard', 'results', 'manual-vote', 'voter-list', 'candidates', 'users'],
@@ -61,29 +108,32 @@ const ROLE_DEFAULT_PAGES = {
   dashboard: ['dashboard']
 };
 const DATA_ENTRY_PAGES = ['manual-vote', 'voter-list', 'candidates'];
-function loadPages() {
-  try { return JSON.parse(fs.readFileSync(PAGES_FILE, 'utf8')); } catch { return {}; }
-}
+function loadPages() { return STORE.pages; }
 function savePages(pages) {
-  fs.writeFileSync(PAGES_FILE, JSON.stringify(pages, null, 2));
+  STORE.pages = pages || {};
+  const rows = Object.entries(STORE.pages).map(([username, pageList]) => ({ username, pages: pageList }));
+  (async () => {
+    const { error: delErr } = await supabase.from('user_pages').delete().neq('username', '');
+    if (delErr) console.warn('Pages reset failed:', delErr.message);
+    if (rows.length) await supabase.from('user_pages').upsert(rows, { onConflict: 'username' });
+  })().catch((e) => console.warn('Supabase pages write failed:', e.message));
 }
 function getUserPages(username) {
-  const pages = loadPages();
+  const pages = STORE.pages;
   return Array.isArray(pages[username]) && pages[username].length > 0 ? pages[username] : null;
 }
 function setUserPages(username, pages) {
-  const all = loadPages();
   if (Array.isArray(pages) && pages.length > 0) {
-    all[username] = [...new Set(pages)];
+    STORE.pages[username] = [...new Set(pages)];
+    persist(supabase.from('user_pages').upsert({ username, pages: STORE.pages[username] }, { onConflict: 'username' }));
   } else {
-    delete all[username];
+    delete STORE.pages[username];
+    persist(supabase.from('user_pages').delete().eq('username', username));
   }
-  savePages(all);
 }
 function deleteUserPages(username) {
-  const all = loadPages();
-  delete all[username];
-  savePages(all);
+  delete STORE.pages[username];
+  persist(supabase.from('user_pages').delete().eq('username', username));
 }
 function resolveUserPages(username, role) {
   const assigned = getUserPages(username);
@@ -128,15 +178,26 @@ function requireDataEntry(req, res, next) {
 }
 
 function loadCandidateList() {
-  try {
-    return JSON.parse(fs.readFileSync(CANDIDATE_LIST_FILE, 'utf8'));
-  } catch {
-    return [];
-  }
+  return STORE.candidates;
 }
 
 function saveCandidateList(candidates) {
-  fs.writeFileSync(CANDIDATE_LIST_FILE, JSON.stringify(candidates, null, 2));
+  const list = Array.isArray(candidates) ? candidates : [];
+  STORE.candidates = list;
+  const CAND_COLS = ['id','candidate_name','sr_number','gujarati_name','member_id','candidate_number','logo_url','address','mobile','photo','created_at'];
+  const rows = list.map((c) => {
+    const r = {};
+    for (const col of CAND_COLS) if (c[col] != null) r[col] = c[col];
+    if (r.id == null) r.id = list.indexOf(c) + 1;
+    return r;
+  });
+  (async () => {
+    if (rows.length) {
+      const { error: delErr } = await supabase.from('candidates').delete().neq('id', -1);
+      if (delErr) console.warn('Candidate delete failed:', delErr.message);
+      await supabase.from('candidates').upsert(rows, { onConflict: 'id' });
+    }
+  })().catch((e) => console.warn('Supabase candidates write failed:', e.message));
 }
 
 function requireAdmin(req, res, next) {
@@ -155,98 +216,121 @@ function requireAdmin(req, res, next) {
 // Ensure default admin has admin role
 setUserRole(DEFAULT_USERNAME, 'admin');
 
-// Simple JSON file-based ballot entry log (tracks who entered each ballot)
+// Supabase-backed ballot entry log (tracks who entered each ballot)
 const BALLOT_LOG_FILE = './ballot_entry_log.json';
 function loadBallotLog() {
-  try { return JSON.parse(fs.readFileSync(BALLOT_LOG_FILE, 'utf8')); } catch { return {}; }
+  return STORE.ballots;
 }
 function saveBallotLog(log) {
-  fs.writeFileSync(BALLOT_LOG_FILE, JSON.stringify(log, null, 2));
+  STORE.ballots = log || {};
+  const rows = Object.entries(STORE.ballots).map(([id, e]) => ({ ballot_id: String(id), ...e }));
+  (async () => {
+    const { error: delErr } = await supabase.from('ballot_entry_log').delete().neq('ballot_id', '');
+    if (delErr) console.warn('Ballot log reset failed:', delErr.message);
+    if (rows.length) await supabase.from('ballot_entry_log').upsert(rows, { onConflict: 'ballot_id' });
+  })().catch((e) => console.warn('Supabase ballot log write failed:', e.message));
 }
 function setBallotEntry(ballotId, enteredBy, castType = 'online') {
-  const log = loadBallotLog();
-  log[String(ballotId)] = { entered_by: enteredBy, cast_type: castType, timestamp: new Date().toISOString() };
-  saveBallotLog(log);
+  const rec = { ballot_id: String(ballotId), entered_by: enteredBy, cast_type: castType, timestamp: new Date().toISOString() };
+  STORE.ballots[String(ballotId)] = rec;
+  persist(supabase.from('ballot_entry_log').upsert(rec, { onConflict: 'ballot_id' }));
 }
 function hasUserVoted(username) {
-  const log = loadBallotLog();
-  return Object.values(log).some(e => e.entered_by === username);
+  return Object.values(STORE.ballots).some(e => e.entered_by === username);
 }
 function getBallotEntry(ballotId) {
-  return loadBallotLog()[String(ballotId)] || null;
+  return STORE.ballots[String(ballotId)] || null;
 }
 function removeBallotEntry(ballotId) {
-  const log = loadBallotLog();
-  delete log[String(ballotId)];
-  saveBallotLog(log);
+  delete STORE.ballots[String(ballotId)];
+  persist(supabase.from('ballot_entry_log').delete().eq('ballot_id', String(ballotId)));
+}
+
+function hydrateFrom(table) {
+  return supabase.from(table).select('*')
+    .then(({ data, error }) => {
+      if (error) return null;
+      return data || null;
+    });
 }
 
 async function initializeDatabase() {
   try {
     console.log('🔄 Initializing database tables...');
-    
-    // Check if users table exists
-    const { data: tables, error: tableError } = await supabase
+
+    // Hydrate in-memory stores from Supabase. If a store is empty but a legacy
+    // local JSON file exists, seed it once so data survives the file -> DB move.
+    try {
+      const roles = await hydrateFrom('user_roles');
+      if (roles && roles.length) for (const r of roles) STORE.roles[r.username] = r.role;
+      else { const legacy = readLegacyFile(ROLES_FILE); if (legacy) { STORE.roles = legacy; persistRoles(); } }
+    } catch (e) { console.warn('roles hydration failed:', e.message); }
+
+    try {
+      const pages = await hydrateFrom('user_pages');
+      if (pages && pages.length) for (const p of pages) STORE.pages[p.username] = Array.isArray(p.pages) ? p.pages : [];
+      else { const legacy = readLegacyFile(PAGES_FILE); if (legacy) { STORE.pages = legacy; savePages(legacy); } }
+    } catch (e) { console.warn('pages hydration failed:', e.message); }
+
+    try {
+      const logos = await hydrateFrom('candidate_logos');
+      if (logos && logos.length) for (const l of logos) STORE.logos[String(l.sr_number)] = l.logo_url || '';
+      else { const legacy = readLegacyFile(CANDIDATE_LOGOS_FILE); if (legacy) { STORE.logos = legacy; saveCandidateLogos(legacy); } }
+    } catch (e) { console.warn('logos hydration failed:', e.message); }
+
+    try {
+      const candidates = await hydrateFrom('candidates');
+      if (candidates && candidates.length) STORE.candidates = candidates;
+      else { const legacy = readLegacyFile(CANDIDATE_LIST_FILE); if (Array.isArray(legacy)) { STORE.candidates = legacy; saveCandidateList(legacy); } }
+    } catch (e) { console.warn('candidates hydration failed:', e.message); }
+
+    try {
+      const ballots = await hydrateFrom('ballot_entry_log');
+      if (ballots && ballots.length) { for (const b of ballots) STORE.ballots[String(b.ballot_id)] = b; }
+      else { const legacy = readLegacyFile(BALLOT_LOG_FILE); if (legacy) { STORE.ballots = legacy; saveBallotLog(legacy); } }
+    } catch (e) { console.warn('ballot log hydration failed:', e.message); }
+
+    try {
+      const voters = await hydrateFrom('voters');
+      if (voters && voters.length) STORE.voters = voters.map(normalizeVoterRecord);
+      else { const legacy = readLegacyFile(VOTERS_FILE); if (Array.isArray(legacy)) { STORE.voters = legacy.map(normalizeVoterRecord); writeVoters(STORE.voters); } }
+    } catch (e) { console.warn('voters hydration failed:', e.message); }
+
+    // Ensure the default account is guaranteed an admin role
+    if (getUserRole(DEFAULT_USERNAME) !== 'admin') {
+      setUserRole(DEFAULT_USERNAME, 'admin');
+      console.log('✅ Default user admin role ensured: ' + DEFAULT_USERNAME);
+    }
+
+    // Ensure the users table + default user exist (kept from the original setup).
+    const { data: existingUser } = await supabase
       .from('users')
       .select('*')
-      .limit(1);
-    
-    if (tableError && tableError.code === 'PGRST204') {
-      console.error('❌ users table does not exist:');
-      console.log('   Run CREATE_USERS_TABLE.sql manually: CREATE TABLE IF NOT EXISTS users (...);');
-      console.log('   This will create the users table with default admin user');
-      
-      // Try to insert default user directly if table doesn't exist
-      const { error: insertError } = await supabase
-        .from('users')
-        .insert({
-          username: DEFAULT_USERNAME,
-          password: DEFAULT_PASSWORD
-        });
-      
-      if (insertError) {
-        console.error('❌ Failed to create default user:', insertError.message);
-      } else {
-        console.log('✅ Default user created: ' + DEFAULT_USERNAME);
-      }
-    } else {
-      // Users table exists
-      console.log('✅ users table exists');
-      
-      // Create default admin user
-      const { data: existingUser } = await supabase
-        .from('users')
-        .select('*')
-        .eq('username', DEFAULT_USERNAME)
-        .single();
-      
-      if (!existingUser) {
-        await supabase.from('users').insert({
-          username: DEFAULT_USERNAME,
-          password: DEFAULT_PASSWORD
-        });
-        console.log('✅ Default user created: ' + DEFAULT_USERNAME);
-      } else {
-        console.log('✅ Default user already exists');
-      }
+      .eq('username', DEFAULT_USERNAME)
+      .single();
+
+    if (!existingUser) {
+      const { error } = await supabase.from('users').insert({
+        username: DEFAULT_USERNAME,
+        password: DEFAULT_PASSWORD
+      });
+      if (error) console.warn('Failed to create default user:', error.message);
+      else console.log('✓ Default user created: ' + DEFAULT_USERNAME);
     }
-    
-    // Check if ballots table exists
+
+    // Verify ballots table exists (informational).
     const { error: ballotsError } = await supabase
       .from('ballots')
       .select('*')
       .limit(1);
-    
+
     if (ballotsError && ballotsError.code === 'PGRST204') {
-      console.error('❌ ballots table does not exist:');
-      console.log('   Create this table in Supabase SQL Editor or run CREATE_BALLOTS_TABLE.sql');
-      console.log('   CREATE TABLE ballots (id BIGINT PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY, sr_numbers JSONB NOT NULL, created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW());');
-    } else {
-      console.log('✅ ballots table exists');
+      console.log('⚠️  ballots table does not exist. Run CREATE_BALLOTS_TABLE.sql in Supabase.');
     }
-    
+
+    console.log('✅ Initialization complete');
   } catch (error) {
-    console.log('⚠️  Note: Database tables may need manual creation in Supabase:', error.message);
+    console.log('⚠️  Note: Database initialization issue:', error.message);
   }
 }
 
@@ -509,7 +593,7 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
       return res.status(400).json({ error: 'No file uploaded' });
     }
 
-    const workbook = XLSX.readFile(req.file.path);
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
 
     function findKey(keys, ...patterns) {
       for (const p of patterns) {
@@ -593,7 +677,6 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
       const firstSheet = workbook.SheetNames[0];
       const firstData = XLSX.utils.sheet_to_json(workbook.Sheets[firstSheet], { defval: '' });
       const sampleKeys = firstData.length > 0 ? Object.keys(firstData[0]) : [];
-      fs.unlinkSync(req.file.path);
       return res.status(400).json({
         error: 'No valid rows found in Excel file',
         detail: 'Detected columns: ' + (sampleKeys.join(', ') || 'none') + '. Tried sheets: ' + workbook.SheetNames.join(', ')
@@ -614,7 +697,6 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
     }
 
     writeVoters(data);
-    fs.unlinkSync(req.file.path);
 
     res.json({ success: true, message: 'Voters list imported', imported: rows.length, processedCount: rows.length });
   } catch (error) {
@@ -645,7 +727,7 @@ app.post('/upload-logo', upload.single('logo'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    const url = `/uploads/${req.file.filename}`;
+    const url = await uploadBufferToStorage(req.file.buffer, req.file.originalname, req.file.mimetype, 'logos');
     res.json({ success: true, url });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -657,7 +739,7 @@ app.post('/upload-voter-photo', upload.single('photo'), async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-    const url = `/uploads/${req.file.filename}`;
+    const url = await uploadBufferToStorage(req.file.buffer, req.file.originalname, req.file.mimetype, 'photos');
     const voterId = req.body.voter_id;
     const srNumber = req.body.sr_number;
     const memberId = req.body.member_id;
@@ -682,7 +764,7 @@ app.post('/upload-voter-photo', upload.single('photo'), async (req, res) => {
 const MAX_BULK_PHOTOS_PER_REQUEST = 10000;
 
 app.post('/upload-voter-photos-bulk', (req, res) => {
-  upload.array('photos', MAX_BULK_PHOTOS_PER_REQUEST)(req, res, (err) => {
+  upload.array('photos', MAX_BULK_PHOTOS_PER_REQUEST)(req, res, async (err) => {
     if (err) {
       if (err.code === 'LIMIT_UNEXPECTED_FILE') {
         return res.status(400).json({ error: `Too many files in one request. Maximum is ${MAX_BULK_PHOTOS_PER_REQUEST} photos per request.` });
@@ -712,7 +794,7 @@ app.post('/upload-voter-photos-bulk', (req, res) => {
             matchedBy = 'sr_number';
           }
           if (idx !== -1) {
-            voters[idx].photo = `/uploads/${file.filename}`;
+            voters[idx].photo = await uploadBufferToStorage(file.buffer, file.originalname, file.mimetype, 'photos');
             matched++;
             results.push({ file: file.originalname, sr_number: num, matched_by: matchedBy, status: 'matched' });
           } else {
@@ -773,13 +855,19 @@ app.post('/voters-list/clear-photos', async (req, res) => {
   }
 });
 
-// Simple JSON file store for candidate party logos
+// Supabase-backed store for candidate party logos
 const CANDIDATE_LOGOS_FILE = './candidate_logos.json';
 function loadCandidateLogos() {
-  try { return JSON.parse(fs.readFileSync(CANDIDATE_LOGOS_FILE, 'utf8')); } catch { return {}; }
+  return STORE.logos;
 }
 function saveCandidateLogos(data) {
-  fs.writeFileSync(CANDIDATE_LOGOS_FILE, JSON.stringify(data, null, 2));
+  STORE.logos = data || {};
+  const rows = Object.entries(STORE.logos).map(([sr, url]) => ({ sr_number: String(sr), logo_url: url || '' }));
+  (async () => {
+    const { error: delErr } = await supabase.from('candidate_logos').delete().neq('sr_number', '');
+    if (delErr) console.warn('Logo reset failed:', delErr.message);
+    if (rows.length) await supabase.from('candidate_logos').upsert(rows, { onConflict: 'sr_number' });
+  })().catch((e) => console.warn('Supabase logo write failed:', e.message));
 }
 
 app.post('/candidate-logo', (req, res) => {
@@ -941,6 +1029,47 @@ app.get('/election-results', async (req, res) => {
         unknown: unknownBallots
       }
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/election-results', requireAdmin, async (req, res) => {
+  try {
+    let deleted = 0;
+    let offset = 0;
+    while (true) {
+      const { data: ballots, error } = await supabase
+        .from('ballots')
+        .select('id')
+        .range(offset, offset + 999);
+      if (error || !ballots || ballots.length === 0) break;
+      const ids = ballots.map((b) => b.id);
+      const { error: delError } = await supabase.from('ballots').delete().in('id', ids);
+      if (delError) return res.status(500).json({ error: delError.message });
+      deleted += ids.length;
+      offset += ballots.length;
+      if (ballots.length < 1000) break;
+    }
+
+    let reset = 0;
+    offset = 0;
+    while (true) {
+      const { data: votes, error } = await supabase
+        .from('votes')
+        .select('id')
+        .range(offset, offset + 999);
+      if (error || !votes || votes.length === 0) break;
+      const ids = votes.map((v) => v.id);
+      const { error: upError } = await supabase.from('votes').update({ total_votes: 0 }).in('id', ids);
+      if (upError) return res.status(500).json({ error: upError.message });
+      reset += ids.length;
+      offset += votes.length;
+      if (votes.length < 1000) break;
+    }
+
+    saveBallotLog({});
+    res.json({ success: true, message: `Deleted ${deleted} ballots and reset ${reset} vote counters` });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2274,7 +2403,7 @@ app.post('/voters-list/bulk-update', async (req, res) => {
   }
 });
 
-// Voters list helpers — stored in JSON for performance, synced to trust.xlsx
+// Voters list helpers — stored in Supabase, cached in memory for performance
 const VOTERS_FILE = require('path').resolve(__dirname, 'voters.json');
 const XLSX_FILE = require('path').resolve(__dirname, 'trust.xlsx');
 function normalizeVoterRecord(voter, fallbackId = null) {
@@ -2303,19 +2432,35 @@ function normalizeVoterRecord(voter, fallbackId = null) {
 }
 
 function readVoters() {
-  try {
-    const raw = JSON.parse(fs.readFileSync(VOTERS_FILE, 'utf8'));
-    if (!Array.isArray(raw)) return [];
-    return raw.map((item, index) => normalizeVoterRecord(item, index + 1));
-  } catch { return []; }
+  return STORE.voters;
 }
+
 function writeVoters(data) {
   const normalized = (Array.isArray(data) ? data : []).map((item, index) => normalizeVoterRecord(item, index + 1));
-  fs.writeFileSync(VOTERS_FILE, JSON.stringify(normalized, null, 2));
-  // Also sync to trust.xlsx Voters List sheet (non-blocking try)
+  const prevIds = new Set(STORE.voters.map(v => v.id).filter(id => id != null));
+  STORE.voters = normalized;
+  const VOTER_COLS = ['id','sr_number','member_id','voter_name','gujarati_name','gender','birthdate','age','mobile','mobile2','address','village','email','address_guj','city_guj','fee_payment','photo','status','cancel_remarks'];
+  const rows = normalized
+    .filter(v => v.id != null)
+    .map(v => { const r = {}; for (const c of VOTER_COLS) r[c] = v[c] != null ? v[c] : ''; r.id = v.id; return r; });
+  const curIds = new Set(rows.map(v => v.id));
+  const removedIds = [...prevIds].filter(id => !curIds.has(id));
+
+  (async () => {
+    if (rows.length) {
+      const { error } = await supabase.from('voters').upsert(rows, { onConflict: 'id' });
+      if (error) console.warn('Supabase voters upsert failed:', error.message);
+    }
+    for (const id of removedIds) {
+      const { error } = await supabase.from('voters').delete().eq('id', id);
+      if (error) console.warn('Supabase voters delete failed:', error.message);
+    }
+  })().catch((e) => console.warn('Supabase voters write failed:', e.message));
+
+  // Optionally mirror to trust.xlsx for local/offline convenience (non-blocking)
   try {
     const wb = XLSX.readFile(XLSX_FILE);
-    const ws = XLSX.utils.json_to_sheet(data);
+    const ws = XLSX.utils.json_to_sheet(normalized);
     ws['!cols'] = [
       { wch: 10 }, { wch: 20 }, { wch: 15 }, { wch: 15 },
       { wch: 12 }, { wch: 25 }, { wch: 10 },
@@ -2336,15 +2481,21 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
-const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on port ${PORT}`);
-});
+// Export the app so it can be served by Vercel serverless functions.
+module.exports = app;
 
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`\n❌ Error: Port ${PORT} is already in use by another process.`);
-    console.error(`Run 'fuser -k ${PORT}/tcp' to free up the port, then try 'npm run dev' again.\n`);
-    process.exit(1);
-  }
-});
+// Only bind a local listening port when running directly (not on Vercel).
+if (!process.env.VERCEL) {
+  const PORT = process.env.PORT || 5000;
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n❌ Error: Port ${PORT} is already in use by another process.`);
+      console.error(`Run 'fuser -k ${PORT}/tcp' to free up the port, then try 'npm run dev' again.\n`);
+      process.exit(1);
+    }
+  });
+}

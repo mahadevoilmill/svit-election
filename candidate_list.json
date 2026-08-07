@@ -88,5 +88,16 @@
     "address": "GHANSHYAM PULSE MILL",
     "mobile": "9974410609",
     "photo": "/uploads/1ece133e9ec7e0a439ebaf8228059fcf"
+  },
+  {
+    "id": 13,
+    "candidate_name": "PATEL RONAK GHANSHYAMBHAI",
+    "sr_number": "9",
+    "created_at": "2026-08-07T16:32:39.284Z",
+    "gujarati_name": "પટેલ રોનક ઘનશ્યામભાઈ",
+    "member_id": "211",
+    "address": "NR.SARSWATI PULS MILL",
+    "mobile": "9825025698",
+    "photo": "/uploads/5b91cc91617bf64b271afc9f3c035e01"
   }
 ]

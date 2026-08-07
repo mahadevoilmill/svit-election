@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Trophy, RefreshCw, Vote, Users, Award, Wifi, Server } from 'lucide-react';
+import { Trophy, RefreshCw, Vote, Users, Award, Wifi, Server, Trash2 } from 'lucide-react';
 
 export default function Results({ user }) {
   const [candidates, setCandidates] = useState([]);
@@ -9,6 +9,28 @@ export default function Results({ user }) {
   const [ballotStats, setBallotStats] = useState({ total: 0, online: 0, offline: 0, unknown: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDeleteAll = async () => {
+    if (!window.confirm('Delete ALL ballots and reset ALL vote counters? This cannot be undone.')) return;
+    if (!window.confirm('Are you SURE? This will permanently erase all voting entries.')) return;
+    setDeleting(true);
+    setError('');
+    try {
+      const res = await fetch('/election-results', {
+        method: 'DELETE',
+        headers: { 'X-Username': user?.username || 'admin' }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to delete entries');
+      await fetchResults();
+      alert(data.message || 'All entries deleted');
+    } catch (err) {
+      setError(err.message || 'Failed to delete entries.');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const fetchResults = async () => {
     setLoading(true);
@@ -48,9 +70,21 @@ export default function Results({ user }) {
             <p style={{ fontSize: '0.875rem', color: '#94a3b8' }}>Candidate-wise vote count</p>
           </div>
         </div>
-        <button onClick={fetchResults} className="btn btn-secondary" style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <RefreshCw size={16} /> Refresh
-        </button>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+          {user?.role === 'admin' && (
+            <button
+              onClick={handleDeleteAll}
+              disabled={deleting}
+              className="btn btn-secondary"
+              style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6, color: '#ef4444', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+            >
+              <Trash2 size={16} /> {deleting ? 'Deleting...' : 'Delete All Entries'}
+            </button>
+          )}
+          <button onClick={fetchResults} className="btn btn-secondary" style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
