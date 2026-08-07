@@ -17,12 +17,30 @@ app.use('/uploads', express.static('uploads'));
 const supabaseUrl = process.env.SUPABASE_URL || (process.env.SUPABASE_PROJECT_ID ? `https://${process.env.SUPABASE_PROJECT_ID}.supabase.co` : null);
 const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-  console.error('SUPABASE_URL or SUPABASE_PROJECT_ID and SUPABASE_KEY (or SUPABASE_SERVICE_ROLE_KEY) are required.');
-  process.exit(1);
+// Do NOT hard-exit here: on serverless runtimes (Vercel) that would crash the
+// function on every cold start. If configuration is missing we build a stub
+// client that fails requests gracefully with a clear error until the Vercel
+// environment variables are set.
+let supabase;
+if (supabaseUrl && supabaseKey) {
+  supabase = createClient(supabaseUrl, supabaseKey);
+} else {
+  console.error('[config] Missing SUPABASE_URL/SUPABASE_PROJECT_ID or SUPABASE_KEY/SUPABASE_SERVICE_ROLE_KEY.');
+  console.error('[config] Add them in Vercel -> Project -> Settings -> Environment Variables, then redeploy.');
+  const cfgError = { message: 'Supabase is not configured. Set SUPABASE_URL/SUPABASE_PROJECT_ID and SUPABASE_KEY/SUPABASE_SERVICE_ROLE_KEY on Vercel.' };
+  const stubQuery = {};
+  const QUERY_METHODS = ['select', 'insert', 'update', 'delete', 'upsert', 'eq', 'in', 'neq', 'order', 'range', 'single', 'limit', 'ilike', 'like', 'contains'];
+  for (const m of QUERY_METHODS) stubQuery[m] = () => stubQuery;
+  stubQuery.then = (resolve) => resolve({ data: null, error: cfgError });
+  stubQuery.catch = () => stubQuery;
+  stubQuery.storage = {
+    from: () => ({
+      upload: () => Promise.reject(new Error('Supabase is not configured.')),
+      getPublicUrl: () => ({ publicUrl: '' })
+    })
+  };
+  supabase = Object.assign(stubQuery, { from: () => stubQuery });
 }
-
-const supabase = createClient(supabaseUrl, supabaseKey);
 
 const upload = multer({ storage: multer.memoryStorage() });
 
