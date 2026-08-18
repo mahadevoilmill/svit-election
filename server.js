@@ -273,6 +273,22 @@ function hydrateFrom(table) {
     });
 }
 
+// Supabase returns at most 1000 rows per request. Large tables (like voters)
+// must be fetched in pages so the in-memory store holds ALL records.
+async function hydrateAll(table) {
+  const rows = [];
+  let offset = 0;
+  while (true) {
+    const { data, error } = await supabase.from(table).select('*').range(offset, offset + 999);
+    if (error) return null;
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    offset += data.length;
+    if (data.length < 1000) break;
+  }
+  return rows;
+}
+
 async function initializeDatabase() {
   try {
     console.log('🔄 Initializing database tables...');
@@ -280,37 +296,37 @@ async function initializeDatabase() {
     // Hydrate in-memory stores from Supabase. If a store is empty but a legacy
     // local JSON file exists, seed it once so data survives the file -> DB move.
     try {
-      const roles = await hydrateFrom('user_roles');
+      const roles = await hydrateAll('user_roles');
       if (roles && roles.length) for (const r of roles) STORE.roles[r.username] = r.role;
       else { const legacy = readLegacyFile(ROLES_FILE); if (legacy) { STORE.roles = legacy; persistRoles(); } }
     } catch (e) { console.warn('roles hydration failed:', e.message); }
 
     try {
-      const pages = await hydrateFrom('user_pages');
+      const pages = await hydrateAll('user_pages');
       if (pages && pages.length) for (const p of pages) STORE.pages[p.username] = Array.isArray(p.pages) ? p.pages : [];
       else { const legacy = readLegacyFile(PAGES_FILE); if (legacy) { STORE.pages = legacy; savePages(legacy); } }
     } catch (e) { console.warn('pages hydration failed:', e.message); }
 
     try {
-      const logos = await hydrateFrom('candidate_logos');
+      const logos = await hydrateAll('candidate_logos');
       if (logos && logos.length) for (const l of logos) STORE.logos[String(l.sr_number)] = l.logo_url || '';
       else { const legacy = readLegacyFile(CANDIDATE_LOGOS_FILE); if (legacy) { STORE.logos = legacy; saveCandidateLogos(legacy); } }
     } catch (e) { console.warn('logos hydration failed:', e.message); }
 
     try {
-      const candidates = await hydrateFrom('candidates');
+      const candidates = await hydrateAll('candidates');
       if (candidates && candidates.length) STORE.candidates = candidates;
       else { const legacy = readLegacyFile(CANDIDATE_LIST_FILE); if (Array.isArray(legacy)) { STORE.candidates = legacy; saveCandidateList(legacy); } }
     } catch (e) { console.warn('candidates hydration failed:', e.message); }
 
     try {
-      const ballots = await hydrateFrom('ballot_entry_log');
+      const ballots = await hydrateAll('ballot_entry_log');
       if (ballots && ballots.length) { for (const b of ballots) STORE.ballots[String(b.ballot_id)] = b; }
       else { const legacy = readLegacyFile(BALLOT_LOG_FILE); if (legacy) { STORE.ballots = legacy; saveBallotLog(legacy); } }
     } catch (e) { console.warn('ballot log hydration failed:', e.message); }
 
     try {
-      const voters = await hydrateFrom('voters');
+      const voters = await hydrateAll('voters');
       if (voters && voters.length) STORE.voters = voters.map(normalizeVoterRecord);
       else { const legacy = readLegacyFile(VOTERS_FILE); if (Array.isArray(legacy)) { STORE.voters = legacy.map(normalizeVoterRecord); writeVoters(STORE.voters); } }
     } catch (e) { console.warn('voters hydration failed:', e.message); }
@@ -627,6 +643,11 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
     }
 
     let rows = [];
+    const existing = readVoters();
+    let maxId = existing.reduce((m, v) => Math.max(m, Number(v.id) || Number(v['Voter ID']) || 0), 0);
+    const existingMemberIds = new Set(existing.map(v => String(v.member_id || '').trim().toLowerCase()).filter(Boolean));
+    const seenMemberIds = new Set();
+    const skippedDuplicates = [];
     for (const sheetName of workbook.SheetNames) {
       const sheet = workbook.Sheets[sheetName];
       const data = XLSX.utils.sheet_to_json(sheet, { defval: '' });
@@ -652,9 +673,6 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
 
       if (!nameKey) continue;
 
-      const existing = readVoters();
-      let maxId = existing.reduce((m, v) => Math.max(m, Number(v.id) || Number(v['Voter ID']) || 0), 0);
-
       const imported = data
         .map((row, index) => {
           const name = row[nameKey];
@@ -668,7 +686,7 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
             voter_name: typeof name === 'number' ? String(name) : String(name || '').trim(),
             gujarati_name: row[gujaratiNameKey] ? String(row[gujaratiNameKey]) : '',
             gender: row[genderKey] ? String(row[genderKey]) : '',
-            birthdate: row[birthdateKey] ? String(row[birthdateKey]) : '',
+            birthdate: normalizeDate(row[birthdateKey]),
             age: row[ageKey] ? String(row[ageKey]) : '',
             mobile: row[mobileKey] ? String(row[mobileKey]) : '',
             mobile2: row[mobile2Key] ? String(row[mobile2Key]) : '',
@@ -677,14 +695,24 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
             email: row[emailKey] ? String(row[emailKey]) : '',
             address_guj: row[addressGujKey] ? String(row[addressGujKey]) : '',
             city_guj: row[cityGujKey] ? String(row[cityGujKey]) : '',
-            fee_payment: row[feeKey] ? String(row[feeKey]) : '',
+            fee_payment: normalizeDate(row[feeKey]),
             photo: row[photoKey] ? String(row[photoKey]) : '',
             _importIndex: index
           };
 
           return voter;
         })
-        .filter(Boolean);
+        .filter(Boolean)
+        .filter((v) => {
+          const mid = String(v.member_id || '').trim().toLowerCase();
+          if (!mid) return true;
+          if (existingMemberIds.has(mid) || seenMemberIds.has(mid)) {
+            skippedDuplicates.push({ sr_number: v.sr_number, member_id: v.member_id, voter_name: v.voter_name });
+            return false;
+          }
+          seenMemberIds.add(mid);
+          return true;
+        });
 
       if (imported.length) {
         rows = imported;
@@ -717,7 +745,16 @@ app.post('/upload-excel', requireDataEntry, upload.single('file'), async (req, r
 
     writeVoters(data);
 
-    res.json({ success: true, message: 'Voters list imported', imported: rows.length, processedCount: rows.length });
+    res.json({
+      success: true,
+      imported: rows.length,
+      processedCount: rows.length,
+      skipped: skippedDuplicates.length,
+      duplicates: skippedDuplicates,
+      message: skippedDuplicates.length
+        ? `Imported ${rows.length} voters. Skipped ${skippedDuplicates.length} row(s) with duplicate Member ID: ${skippedDuplicates.map(d => d.member_id).join(', ')}`
+        : 'Voters list imported'
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -924,12 +961,21 @@ app.get('/voters-list', async (req, res) => {
       }
     } catch (e) { console.warn('Failed to fetch vote counts:', e.message); }
 
-    res.json(data.map((voter) => ({
+    const mapped = data.map((voter) => ({
       ...voter,
       id: voter.id ?? null,
       total_votes: voteMap[String(voter.sr_number)] || 0,
       has_voted: (voteMap[String(voter.sr_number)] || 0) > 0
-    })));
+    }));
+
+    mapped.sort((a, b) => {
+      const na = Number(a.sr_number);
+      const nb = Number(b.sr_number);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a.sr_number || '').localeCompare(String(b.sr_number || ''), undefined, { numeric: true });
+    });
+
+    res.json(mapped);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -1439,6 +1485,38 @@ app.get('/voters-list/check-member-id/:memberId', async (req, res) => {
   }
 });
 
+app.get('/voters-list/duplicates', async (req, res) => {
+  try {
+    const data = readVoters();
+    const groups = {};
+    for (const v of data) {
+      const mid = v.member_id && String(v.member_id).trim();
+      if (!mid) continue;
+      if (!groups[mid]) groups[mid] = [];
+      groups[mid].push(v);
+    }
+    const duplicateGroups = Object.values(groups)
+      .filter(group => group.length > 1)
+      .map(group => ({
+        member_id: group[0].member_id,
+        count: group.length,
+        voters: group.map(v => ({
+          id: v.id,
+          sr_number: v.sr_number,
+          voter_name: v.voter_name,
+          gujarati_name: v.gujarati_name,
+          mobile: v.mobile,
+          village: v.village,
+          status: v.status
+        }))
+      }))
+      .sort((a, b) => String(a.member_id).localeCompare(String(b.member_id), undefined, { numeric: true }));
+    res.json({ success: true, total_groups: duplicateGroups.length, total_duplicates: duplicateGroups.reduce((sum, g) => sum + g.count, 0), groups: duplicateGroups });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 app.put('/voters-list/:id/cancel', async (req, res) => {
   try {
     const id = Number(req.params.id);
@@ -1510,6 +1588,16 @@ app.post('/voters-list/bulk', async (req, res) => {
     const data = readVoters();
     const updates = [];
     const supabaseRecords = [];
+    const batchMembers = new Set();
+    const skippedDup = [];
+
+    const memberExists = (mid) => {
+      const key = String(mid || '').trim().toLowerCase();
+      if (!key) return false;
+      if (batchMembers.has(key)) return true;
+      if (data.some(v => String(v.member_id || '').trim().toLowerCase() === key)) return true;
+      return false;
+    };
 
     voters.forEach((entry) => {
       if (entry.id) {
@@ -1554,27 +1642,37 @@ app.post('/voters-list/bulk', async (req, res) => {
         }
       }
 
-      const newVoter = {
-        id: (data.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1),
-        sr_number: entry.sr_number ?? '',
-        member_id: entry.member_id ?? '',
-        voter_name: entry.voter_name ?? '',
-        gujarati_name: entry.gujarati_name ?? '',
-        gender: entry.gender ?? '',
-        birthdate: entry.birthdate ?? '',
-        age: entry.age ?? '',
-        mobile: entry.mobile ?? '',
-        mobile2: entry.mobile2 ?? '',
-        address: entry.address ?? '',
-        village: entry.village ?? '',
-        email: entry.email ?? '',
-        address_guj: entry.address_guj ?? '',
-        city_guj: entry.city_guj ?? '',
-        fee_payment: entry.fee_payment ?? '',
-        photo: entry.photo ?? '',
-        status: entry.status ?? 'active',
-        cancel_remarks: entry.cancel_remarks ?? ''
-      };
+      const newVoter = (() => {
+        const voter = {
+          id: (data.reduce((max, item) => Math.max(max, Number(item.id) || 0), 0) + 1),
+          sr_number: entry.sr_number ?? '',
+          member_id: entry.member_id ?? '',
+          voter_name: entry.voter_name ?? '',
+          gujarati_name: entry.gujarati_name ?? '',
+          gender: entry.gender ?? '',
+          birthdate: normalizeDate(entry.birthdate),
+          age: entry.age ?? '',
+          mobile: entry.mobile ?? '',
+          mobile2: entry.mobile2 ?? '',
+          address: entry.address ?? '',
+          village: entry.village ?? '',
+          email: entry.email ?? '',
+          address_guj: entry.address_guj ?? '',
+          city_guj: entry.city_guj ?? '',
+          fee_payment: normalizeDate(entry.fee_payment),
+          photo: entry.photo ?? '',
+          status: entry.status ?? 'active',
+          cancel_remarks: entry.cancel_remarks ?? ''
+        };
+        const mid = String(voter.member_id || '').trim().toLowerCase();
+        if (mid && memberExists(voter.member_id)) {
+          skippedDup.push({ sr_number: voter.sr_number, member_id: voter.member_id, voter_name: voter.voter_name });
+          return null;
+        }
+        if (mid) batchMembers.add(mid);
+        return voter;
+      })();
+      if (!newVoter) return;
       data.push(newVoter);
       updates.push(newVoter);
       const sr = Number(newVoter.sr_number);
@@ -1598,7 +1696,16 @@ app.post('/voters-list/bulk', async (req, res) => {
       try { await supabase.from('votes').upsert(supabaseRecords, { onConflict: 'sr_number' }); } catch (e) { console.warn('Supabase bulk sync failed:', e.message); }
     }
 
-    res.json({ success: true, message: 'Bulk update completed', updated: updates.length, voters: updates });
+    res.json({
+      success: true,
+      updated: updates.length,
+      skipped: skippedDup.length,
+      duplicates: skippedDup,
+      voters: updates,
+      message: skippedDup.length
+        ? `Bulk update completed. Skipped ${skippedDup.length} row(s) with duplicate Member ID: ${skippedDup.map(d => d.member_id).join(', ')}`
+        : 'Bulk update completed'
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -2425,6 +2532,40 @@ app.post('/voters-list/bulk-update', async (req, res) => {
 // Voters list helpers — stored in Supabase, cached in memory for performance
 const VOTERS_FILE = require('path').resolve(__dirname, 'voters.json');
 const XLSX_FILE = require('path').resolve(__dirname, 'trust.xlsx');
+function normalizeDate(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (value instanceof Date && !isNaN(value)) {
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(value.getDate())}-${p(value.getMonth() + 1)}-${value.getFullYear()}`;
+  }
+  const s = String(value).trim();
+  if (!s) return '';
+
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000);
+    if (!isNaN(d.getTime())) {
+      const p = (x) => String(x).padStart(2, '0');
+      return `${p(d.getUTCDate())}-${p(d.getUTCMonth() + 1)}-${d.getUTCFullYear()}`;
+    }
+    return s;
+  }
+
+  const p = (x) => String(x).padStart(2, '0');
+  let m = s.match(/^(\d{3,4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (m) return `${p(m[3])}-${p(m[2])}-${m[1]}`;
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    const year = m[3].length === 2 ? '20' + m[3] : m[3];
+    return `${p(m[1])}-${p(m[2])}-${year}`;
+  }
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return `${p(parsed.getDate())}-${p(parsed.getMonth() + 1)}-${parsed.getFullYear()}`;
+  }
+  return s;
+}
+
 function normalizeVoterRecord(voter, fallbackId = null) {
   const id = Number(voter.id ?? voter['Voter ID'] ?? fallbackId ?? 0);
   return {
@@ -2514,18 +2655,49 @@ app.use((err, req, res, next) => {
 // Export the app so it can be served by Vercel serverless functions.
 module.exports = app;
 
+function findAvailablePort(startPort) {
+  return new Promise((resolve, reject) => {
+    const net = require('net');
+    const tester = net.createServer();
+
+    tester.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(findAvailablePort(startPort + 1));
+      } else {
+        reject(err);
+      }
+    });
+
+    tester.once('listening', () => {
+      tester.close(() => resolve(startPort));
+    });
+
+    tester.listen(startPort, '0.0.0.0');
+  });
+}
+
 // Only bind a local listening port when running directly (not on Vercel).
 if (!process.env.VERCEL) {
-  const PORT = process.env.PORT || 5000;
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
-  });
+  (async () => {
+    const requestedPort = Number(process.env.PORT) || 5000;
+    try {
+      const PORT = await findAvailablePort(requestedPort);
+      process.env.PORT = String(PORT);
+      const server = app.listen(PORT, '0.0.0.0', () => {
+        console.log(`Server running on port ${PORT}`);
+      });
 
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.error(`\n❌ Error: Port ${PORT} is already in use by another process.`);
-      console.error(`Run 'fuser -k ${PORT}/tcp' to free up the port, then try 'npm run dev' again.\n`);
+      server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          console.warn(`⚠️ Port ${PORT} became busy after startup; please restart the app or free the port.`);
+        } else {
+          console.error('Server startup error:', err.message);
+          process.exit(1);
+        }
+      });
+    } catch (error) {
+      console.error('Unable to start server:', error.message);
       process.exit(1);
     }
-  });
+  })();
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { Users, Search, RefreshCw, Trash2, AlertCircle, CheckCircle2, PlusCircle, Download, XCircle, Undo2, AlertTriangle, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, UserPlus, Save, Columns } from 'lucide-react';
 
@@ -21,6 +21,46 @@ const createEmptyVoter = () => ({
   photo: '',
   status: 'active',
   cancel_remarks: ''
+});
+
+const dateFieldKeys = new Set(['birthdate', 'fee_payment']);
+
+const formatDate = (value) => {
+  if (value === null || value === undefined || value === '') return '';
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return `${pad(value.getDate())}-${pad(value.getMonth() + 1)}-${value.getFullYear()}`;
+  }
+  const s = String(value).trim();
+  if (!s) return '';
+
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const n = Number(s);
+    const d = new Date(Date.UTC(1899, 11, 30) + n * 86400000);
+    if (!isNaN(d.getTime())) {
+      return `${pad(d.getUTCDate())}-${pad(d.getUTCMonth() + 1)}-${d.getUTCFullYear()}`;
+    }
+    return s;
+  }
+
+  let m = s.match(/^(\d{3,4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if (m) {
+    const [, year, month, day] = m;
+    return `${pad(day)}-${pad(month)}-${year}`;
+  }
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    let [, day, month, year] = m;
+    if (year.length === 2) year = '20' + year;
+    return `${pad(day)}-${pad(month)}-${year}`;
+  }
+  return s;
+};
+
+const sortVoters = (list) => [...list].sort((a, b) => {
+  const na = Number(a.sr_number);
+  const nb = Number(b.sr_number);
+  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+  return String(a.sr_number || '').localeCompare(String(b.sr_number || ''), undefined, { numeric: true });
 });
 
 export default function VoterList({ user, setActiveTab, setCandidatePrefill }) {
@@ -97,6 +137,9 @@ const loadColumns = () => {
 const [columns, setColumns] = useState(loadColumns);
 const [newColName, setNewColName] = useState('');
 const [newColLabel, setNewColLabel] = useState('');
+const [showDupModal, setShowDupModal] = useState(false);
+const [dupSelected, setDupSelected] = useState(new Set());
+const [dupDeleting, setDupDeleting] = useState(false);
 const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -122,12 +165,119 @@ const fileInputRef = useRef(null);
     try {
       const res = await fetch('/voters-list', { headers: { 'X-Username': user?.username || '' } });
       const data = await res.json();
-      setVoters(Array.isArray(data) ? data : data.data || []);
+      setVoters(sortVoters(Array.isArray(data) ? data : data.data || []));
     } catch (err) {
       console.error('Error fetching voters:', err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const duplicateGroups = useMemo(() => {
+    const map = {};
+    for (const v of voters) {
+      const mid = String(v.member_id || '').trim();
+      if (!mid) continue;
+      if (!map[mid]) map[mid] = [];
+      map[mid].push(v);
+    }
+    return Object.values(map)
+      .filter(group => group.length > 1)
+      .map(group => ({
+        member_id: group[0].member_id,
+        count: group.length,
+        voters: group
+      }))
+      .sort((a, b) => String(a.member_id).localeCompare(String(b.member_id), undefined, { numeric: true }));
+  }, [voters]);
+
+  const pickKeep = (groupVoters) => {
+    return groupVoters.reduce((keep, v) => {
+      const kid = Number(keep.id);
+      const vid = Number(v.id);
+      if (!keep.id) return v;
+      if (v.id && (!kid || (vid && vid < kid))) return v;
+      return keep;
+    }, groupVoters[0] || null);
+  };
+
+  const toggleDupSelect = (id) => {
+    setDupSelected(prev => {
+      const next = new Set(prev);
+      const sid = String(id);
+      if (next.has(sid)) next.delete(sid); else next.add(sid);
+      return next;
+    });
+  };
+
+  const toggleGroupSelect = (groupVoters) => {
+    const ids = groupVoters.filter(v => v.id).map(v => String(v.id));
+    setDupSelected(prev => {
+      const next = new Set(prev);
+      const all = ids.every(id => next.has(id));
+      if (all) ids.forEach(id => next.delete(id)); else ids.forEach(id => next.add(id));
+      return next;
+    });
+  };
+
+  const deleteVoterIds = async (ids) => {
+    if (ids.length === 0) return true;
+    setDupDeleting(true);
+    try {
+      const res = await fetch('/voters-list/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Username': user?.username || '' },
+        body: JSON.stringify({ ids })
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setStatusMsg({ type: 'success', text: payload.message || `${ids.length} duplicate voter(s) deleted` });
+        await fetchVoters();
+        setDupSelected(new Set());
+        return true;
+      }
+      setStatusMsg({ type: 'error', text: payload.error || 'Failed to delete duplicate voters' });
+      return false;
+    } catch {
+      setStatusMsg({ type: 'error', text: 'Server error while deleting duplicates.' });
+      return false;
+    } finally {
+      setDupDeleting(false);
+    }
+  };
+
+  const deleteDupesKeepOne = async (group) => {
+    const keep = pickKeep(group.voters);
+    const ids = group.voters.filter(v => v.id && String(v.id) !== String(keep.id)).map(v => Number(v.id));
+    if (ids.length === 0) {
+      setStatusMsg({ type: 'error', text: `No removable duplicates for Member ID "${group.member_id}"` });
+      return;
+    }
+    if (!window.confirm(`Delete ${ids.length} duplicate voter(s) for Member ID "${group.member_id}"? One record will be kept. This cannot be undone.`)) return;
+    await deleteVoterIds(ids);
+  };
+
+  const deleteAllDupes = async () => {
+    const ids = [];
+    for (const group of duplicateGroups) {
+      const keep = pickKeep(group.voters);
+      group.voters.forEach(v => {
+        if (v.id && String(v.id) !== String(keep.id)) ids.push(Number(v.id));
+      });
+    }
+    if (ids.length === 0) {
+      setStatusMsg({ type: 'success', text: 'No duplicates to delete' });
+      return;
+    }
+    if (!window.confirm(`Delete ${ids.length} duplicate voter(s) across ${duplicateGroups.length} Member ID(s)? One record per ID will be kept. This cannot be undone.`)) return;
+    await deleteVoterIds(ids);
+  };
+
+  const deleteSelectedDupes = async () => {
+    const ids = [...dupSelected].map(Number).filter(Boolean);
+    if (ids.length === 0) return;
+    if (!window.confirm(`Delete ${ids.length} selected duplicate voter(s)? This cannot be undone.`)) return;
+    await deleteVoterIds(ids);
   };
 
   const checkDuplicateMemberId = async (memberId, currentKey) => {
@@ -681,7 +831,8 @@ const fileInputRef = useRef(null);
       const rows = filtered.map(v => {
         const row = {};
         visibleCols.forEach(c => {
-          row[c.label] = v[c.key] !== undefined && v[c.key] !== null ? v[c.key] : '';
+          const raw = v[c.key] !== undefined && v[c.key] !== null ? v[c.key] : '';
+          row[c.label] = dateFieldKeys.has(c.key) ? formatDate(raw) : raw;
         });
         return row;
       });
@@ -750,6 +901,12 @@ const fileInputRef = useRef(null);
               <Trash2 size={16} /> Delete Selected ({selectedIds.size})
             </button>
           )}
+
+          <button onClick={() => setShowDupModal(true)} className="btn btn-secondary" style={{ padding: '8px 16px', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <AlertTriangle size={16} /> Show Duplicates {duplicateGroups.length > 0 && (
+              <span style={{ background: '#fbbf24', color: '#0f172a', borderRadius: '10px', padding: '1px 7px', fontSize: '0.72rem', fontWeight: 700 }}>{duplicateGroups.length}</span>
+            )}
+          </button>
 
           <button onClick={fetchVoters} className="btn btn-secondary" style={{ padding: '8px 16px' }}>
             <RefreshCw size={16} /> Refresh
@@ -941,8 +1098,8 @@ const fileInputRef = useRef(null);
                   const isCancelled = v.status === 'cancelled';
                   const hasDup = !!duplicateWarnings[key];
                   const inpStyle = { padding: '6px 8px', fontSize: '0.8rem', borderRadius: '6px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.05)', color: 'inherit', width: '100%', boxSizing: 'border-box' };
-                  const inp = (field, w) => (
-                    <input style={{ ...inpStyle, width: w || '100%' }} value={v[field] || ''} onChange={(e) => handleFieldChange(key, field, e.target.value)} disabled={!isEditing} />
+                  const inp = (field, w, formatter) => (
+                    <input style={{ ...inpStyle, width: w || '100%' }} value={formatter ? formatter(v[field]) : (v[field] || '')} onChange={(e) => handleFieldChange(key, field, e.target.value)} disabled={!isEditing} />
                   );
                   const renderCell = (col) => {
                     if (col.key === 'status') {
@@ -978,6 +1135,9 @@ const fileInputRef = useRef(null);
                         );
                       }
                       return v.photo ? <img src={v.photo} alt="photo" style={{ maxWidth: 36, maxHeight: 36, borderRadius: 6, objectFit: 'cover' }} /> : <span style={{ color: '#475569', fontSize: '0.75rem' }}>No photo</span>;
+                    }
+                    if (col.key === 'birthdate' || col.key === 'fee_payment') {
+                      return inp(col.key, undefined, formatDate);
                     }
                     return inp(col.key);
                   };
@@ -1352,6 +1512,108 @@ const fileInputRef = useRef(null);
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showDupModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: '1rem' }} onClick={() => setShowDupModal(false)}>
+          <div className="glass-panel" style={{ padding: '1.5rem', width: '100%', maxWidth: '900px', maxHeight: '90vh', display: 'flex', flexDirection: 'column', position: 'relative' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div style={{ padding: '10px', background: 'rgba(251, 191, 36, 0.15)', borderRadius: '12px', color: '#fbbf24' }}>
+                  <AlertTriangle size={22} />
+                </div>
+                <div>
+                  <h3 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0 }}>Duplicate Member IDs</h3>
+                  <p style={{ fontSize: '0.8rem', color: '#94a3b8', margin: 0 }}>
+                    {duplicateGroups.length === 0
+                      ? 'No duplicate Member IDs found'
+                      : `${duplicateGroups.length} Member ID(s) have ${duplicateGroups.reduce((s, g) => s + g.count, 0)} total records. Keep one per ID and delete the rest.`}
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button className="btn btn-secondary" onClick={() => setShowDupModal(false)} style={{ padding: '8px 14px', fontSize: '0.8rem' }}>
+                  Close
+                </button>
+              </div>
+            </div>
+
+            {duplicateGroups.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '3rem', color: '#64748b', fontSize: '0.9rem' }}>
+                <CheckCircle2 size={32} color="#34d399" style={{ marginBottom: '0.75rem' }} />
+                <div>No duplicate member IDs in the voter list.</div>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', marginBottom: '0.75rem', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.8rem', color: '#94a3b8' }}>{dupSelected.size} selected</span>
+                  <button className="btn btn-danger" onClick={deleteSelectedDupes} disabled={dupDeleting || dupSelected.size === 0} style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Trash2 size={16} /> Delete Selected
+                  </button>
+                  <button className="btn btn-danger" onClick={deleteAllDupes} disabled={dupDeleting} style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Trash2 size={16} /> Delete All Duplicates (Keep 1 per ID)
+                  </button>
+                </div>
+
+                <div style={{ overflowY: 'auto', maxHeight: '58vh', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 'var(--radius-md)' }}>
+                  {duplicateGroups.map(group => {
+                    const keep = pickKeep(group.voters);
+                    return (
+                      <div key={String(group.member_id)} style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0.6rem 0.75rem', background: 'rgba(251, 191, 36, 0.08)' }}>
+                          <button onClick={() => toggleGroupSelect(group.voters)} style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0, fontSize: '0.8rem' }} title="Select group">Select</button>
+                          <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#fbbf24' }}>{group.member_id}</span>
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', background: 'rgba(255,255,255,0.08)', padding: '2px 8px', borderRadius: '10px' }}>{group.count} records</span>
+                          <button className="btn btn-danger" onClick={() => deleteDupesKeepOne(group)} disabled={dupDeleting} style={{ marginLeft: 'auto', padding: '4px 10px', fontSize: '0.72rem', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Trash2 size={12} /> Keep first, delete {group.count - 1}
+                          </button>
+                        </div>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                          <thead>
+                            <tr style={{ color: '#94a3b8', fontSize: '0.72rem' }}>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}></th>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}>SR No</th>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}>Name</th>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}>Mobile</th>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}>Village</th>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}>Status</th>
+                              <th style={{ padding: '5px 10px', textAlign: 'left' }}>Action</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {group.voters.map(v => {
+                              const isKeep = v.id && String(v.id) === String(keep.id);
+                              return (
+                                <tr key={String(v.id)} style={{ borderTop: '1px solid rgba(255,255,255,0.05)', background: isKeep ? 'rgba(16, 185, 129, 0.06)' : 'transparent' }}>
+                                  <td style={{ padding: '5px 10px' }}>
+                                    <input type="checkbox" checked={v.id ? dupSelected.has(String(v.id)) : false} disabled={!v.id} onChange={() => v.id && toggleDupSelect(v.id)} style={{ cursor: v.id ? 'pointer' : 'not-allowed', accentColor: '#38bdf8' }} />
+                                  </td>
+                                  <td style={{ padding: '5px 10px', fontFamily: 'monospace', fontSize: '0.78rem' }}>{v.sr_number || 'N/A'}</td>
+                                  <td style={{ padding: '5px 10px' }}>
+                                    {v.voter_name || 'N/A'}{' '}
+                                    {isKeep && <span style={{ fontSize: '0.68rem', color: '#34d399', fontWeight: 700 }}>(keep)</span>}
+                                  </td>
+                                  <td style={{ padding: '5px 10px', color: '#94a3b8' }}>{v.mobile || '-'}</td>
+                                  <td style={{ padding: '5px 10px', color: '#94a3b8' }}>{v.village || '-'}</td>
+                                  <td style={{ padding: '5px 10px', fontSize: '0.72rem', color: v.status === 'cancelled' ? '#fca5a5' : '#6ee7b7', fontWeight: 600 }}>{v.status || 'active'}</td>
+                                  <td style={{ padding: '5px 10px' }}>
+                                    <button onClick={() => v.id && deleteVoterIds([Number(v.id)])} disabled={dupDeleting || !v.id} style={{ background: 'none', border: 'none', color: v.id ? '#fca5a5' : '#475569', cursor: v.id ? 'pointer' : 'not-allowed', padding: '4px' }} title={isKeep ? 'Deleting this will remove the kept record' : 'Delete this duplicate'}>
+                                      <Trash2 size={14} />
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

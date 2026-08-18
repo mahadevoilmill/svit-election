@@ -115,6 +115,15 @@ export default function App() {
     }
   }, [activeTab, user]);
 
+  useEffect(() => {
+    if (!user || !activeTab || activeTab === 'login') return;
+    const allowedPages = resolveUserPages(user);
+    const canSee = (tab) => user?.role === 'admin' || allowedPages.includes(tab);
+    if (!canSee(activeTab)) {
+      setActiveTab(getLandingPage(user));
+    }
+  }, [user, activeTab]);
+
   const handleBgColorChange = (color) => {
     const nextColor = color || DEFAULT_THEME_COLOR;
     setBgColor(nextColor);
@@ -169,12 +178,12 @@ export default function App() {
       />
 
       <main style={{ flex: 1, paddingBottom: '3rem' }}>
-        {activeTab === 'dashboard' && (canSee('dashboard') ? <Dashboard user={user} /> : (setActiveTab(getLandingPage(user)), null))}
-        {activeTab === 'results' && (canSee('results') ? <Results user={user} /> : (setActiveTab('dashboard'), null))}
-        {activeTab === 'manual-vote' && (canSee('manual-vote') ? <ManualVote user={user} /> : (setActiveTab('dashboard'), null))}
-        {activeTab === 'voter-list' && (canSee('voter-list') ? <VoterList user={user} setActiveTab={setActiveTab} setCandidatePrefill={setCandidatePrefill} /> : (setActiveTab('dashboard'), null))}
-        {activeTab === 'candidates' && (canSee('candidates') ? <Candidates user={user} candidatePrefill={candidatePrefill} clearCandidatePrefill={() => setCandidatePrefill(null)} /> : (setActiveTab('dashboard'), null))}
-        {activeTab === 'users' && (user?.role === 'admin' ? <UserManagement user={user} /> : (setActiveTab('dashboard'), null))}
+        {activeTab === 'dashboard' && (canSee('dashboard') ? <Dashboard user={user} /> : null)}
+        {activeTab === 'results' && (canSee('results') ? <Results user={user} /> : null)}
+        {activeTab === 'manual-vote' && (canSee('manual-vote') ? <ManualVote user={user} /> : null)}
+        {activeTab === 'voter-list' && (canSee('voter-list') ? <VoterList user={user} setActiveTab={setActiveTab} setCandidatePrefill={setCandidatePrefill} /> : null)}
+        {activeTab === 'candidates' && (canSee('candidates') ? <Candidates user={user} candidatePrefill={candidatePrefill} clearCandidatePrefill={() => setCandidatePrefill(null)} /> : null)}
+        {activeTab === 'users' && (user?.role === 'admin' ? <UserManagement user={user} /> : null)}
         {activeTab === 'reset-password' && <ResetPassword setActiveTab={setActiveTab} />}
       </main>
 
