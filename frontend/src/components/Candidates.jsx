@@ -38,7 +38,7 @@ export default function Candidates({ user, candidatePrefill, clearCandidatePrefi
   const [editingId, setEditingId] = useState(null);
   const [srEditId, setSrEditId] = useState(null);
   const [srEditValue, setSrEditValue] = useState('');
-  const [assignArmed, setAssignArmed] = useState(false);
+  const [assignArmed, setAssignArmed] = useState(null);
   const [voterList, setVoterList] = useState(null);
   const [voterSearch, setVoterSearch] = useState('');
   const [voterResults, setVoterResults] = useState([]);
@@ -222,6 +222,16 @@ export default function Candidates({ user, candidatePrefill, clearCandidatePrefi
       const logoUrl = uploadedLogoUrl || (logoPreview || payload.logo_url || '');
       const photoUrl = uploadedPhotoUrl || (voterPhoto || '');
 
+      if (uploadedPhotoUrl && serverCandidate?.id) {
+        const res = await fetch(`/candidates/${serverCandidate.id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', 'X-Username': user?.username || 'NEST' },
+          body: JSON.stringify({ photo: photoUrl })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data?.error || 'Failed to save candidate photo');
+      }
+
       if (logoUrl && !logoUrl.startsWith('blob:')) {
         try {
           await fetch('/candidate-logo', {
@@ -386,23 +396,30 @@ export default function Candidates({ user, candidatePrefill, clearCandidatePrefi
     }
   };
 
-  const handleAssignSrByGujarati = async () => {
+  const handleAssignSrByName = async (sortBy) => {
     const local = readStoredCandidates();
     if (!local.length) {
       setStatusMsg({ type: 'error', text: 'No registered candidates to renumber.' });
       return;
     }
-    if (!assignArmed) {
-      setAssignArmed(true);
-      setStatusMsg({ type: 'success', text: 'Click "Assign SR (Gujarati)" again to confirm renumbering 1..N in Gujarati-name order.' });
-      setTimeout(() => setAssignArmed(false), 4000);
+    const label = sortBy === 'surname' ? 'Surname' : 'First Name';
+    if (assignArmed !== sortBy) {
+      setAssignArmed(sortBy);
+      setStatusMsg({ type: 'success', text: `Click "Assign SR (${label})" again to confirm renumbering 1..N by Gujarati ${label.toLowerCase()} order.` });
+      setTimeout(() => setAssignArmed((current) => current === sortBy ? null : current), 4000);
       return;
     }
-    setAssignArmed(false);
+    setAssignArmed(null);
     setLoading(true);
     try {
+      const collator = new Intl.Collator('gu');
+      const name = (candidate) => String(candidate.gujarati_name || candidate.candidate_name || '').trim();
+      const sortKey = (candidate) => {
+        const parts = name(candidate).split(/\s+/);
+        return sortBy === 'surname' ? parts[0] : (parts[1] || parts[0]);
+      };
       const sorted = [...local].sort((a, b) =>
-        String(a.gujarati_name || a.candidate_name || '').localeCompare(String(b.gujarati_name || b.candidate_name || ''), 'gu')
+        collator.compare(sortKey(a), sortKey(b)) || collator.compare(name(a), name(b))
       );
       let updated = [];
       for (let i = 0; i < sorted.length; i++) {
@@ -422,7 +439,7 @@ export default function Candidates({ user, candidatePrefill, clearCandidatePrefi
       );
       writeStoredCandidates(existing);
       setCandidates(existing);
-      setStatusMsg({ type: 'success', text: `SR numbers assigned in Gujarati-name order (1-${updated.length}).` });
+      setStatusMsg({ type: 'success', text: `SR numbers assigned by Gujarati ${label.toLowerCase()} order (1-${updated.length}).` });
       fetchCandidates();
     } catch (err) {
       setStatusMsg({ type: 'error', text: 'Failed to assign SR numbers: ' + (err.message || 'Unknown error') });
@@ -702,12 +719,22 @@ export default function Candidates({ user, candidatePrefill, clearCandidatePrefi
               <button
                 type="button"
                 className="btn"
-                onClick={handleAssignSrByGujarati}
+                onClick={() => handleAssignSrByName('surname')}
                 disabled={loading}
-                title="Assign SR numbers 1..N in Gujarati-name order (as per election rules)"
-                style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: assignArmed ? 'rgba(239, 68, 68, 0.25)' : undefined, border: assignArmed ? '1px solid rgba(239, 68, 68, 0.5)' : undefined }}
+                title="Assign SR numbers 1..N by Gujarati surname order"
+                style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: assignArmed === 'surname' ? 'rgba(239, 68, 68, 0.25)' : undefined, border: assignArmed === 'surname' ? '1px solid rgba(239, 68, 68, 0.5)' : undefined }}
               >
-                <Hash size={14} /> {assignArmed ? 'Confirm Assign SR?' : 'Assign SR (Gujarati)'}
+                <Hash size={14} /> {assignArmed === 'surname' ? 'Confirm Surname Order?' : 'Assign SR (Surname)'}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                onClick={() => handleAssignSrByName('first-name')}
+                disabled={loading}
+                title="Assign SR numbers 1..N by Gujarati first-name order"
+                style={{ padding: '0.5rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.3rem', background: assignArmed === 'first-name' ? 'rgba(239, 68, 68, 0.25)' : undefined, border: assignArmed === 'first-name' ? '1px solid rgba(239, 68, 68, 0.5)' : undefined }}
+              >
+                <Hash size={14} /> {assignArmed === 'first-name' ? 'Confirm First Name Order?' : 'Assign SR (First Name)'}
               </button>
             </div>
           </div>

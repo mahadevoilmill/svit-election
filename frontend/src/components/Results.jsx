@@ -172,6 +172,9 @@ export default function Results({ user }) {
                         <span style={{ fontWeight: 800, fontSize: '1.1rem', color: '#fff' }}>{c.candidate_name ? c.candidate_name.charAt(0) : '#'}</span>
                       )}
                     </div>
+                    {c.logo_url && c.logo_url !== c.photo && (
+                      <img src={c.logo_url} alt="" style={{ width: 36, height: 36, borderRadius: 6, objectFit: 'contain', background: 'rgba(255,255,255,0.08)', flexShrink: 0 }} />
+                    )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {c.candidate_name || `Candidate #${c.sr_number}`}
